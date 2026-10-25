@@ -173,7 +173,7 @@
       '<h2>Tableau de bord</h2>' +
       '<p class="lead">La logistique crée-t-elle ou détruit-elle de la valeur ? La VNL répond en francs congolais, après coûts logistiques et effet de l’environnement.</p>' +
       '<div class="row"><label>Année analysée<select data-a="sel">' + opts + '</select></label>' +
-      '<button class="btn" data-do="csv">Exporter les résultats (CSV)</button></div>' +
+      (canDownload() ? '<button class="btn" data-do="csv">Exporter les résultats (CSV)</button>' : '') + '</div>' +
       '<div class="kpis">' +
       '<div class="kpi"><div class="l">VNL</div><div class="v">' + fmt(r.vnl, 1) + '</div><div class="s">M FC</div></div>' +
       '<div class="kpi"><div class="l">VNL / VMB</div><div class="v">' + fmt(r.ratio * 100, 1) + ' %</div><div class="s">part de valeur conservée</div></div>' +
@@ -188,6 +188,10 @@
       '</div>' +
       '<div class="card"><h3>Résultats par année</h3><div class="tablewrap"><table><thead><tr><th>Année</th><th>VMB</th><th>Clog</th><th>Ψ</th><th>Φ</th><th>Δ</th><th>VNL</th><th>VNL/VMB</th><th class="left">Régime</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '<p class="note">VNL = VMB × (1 − τ) × Ψ × Φ − Clog, avec τ = ' + fmt(state.params.tau * 100, 0) + ' % et θ = ' + fmt(state.params.theta, 2) + '. Les montants sont en M FC. Le mémoire arrondit Ψ et Φ avant de multiplier, d’où des écarts de l’ordre de 1 % avec ses tableaux.</p></div>';
+  }
+
+  function canDownload() {
+    try { return window.top === window.self; } catch (e) { return false; }
   }
 
   function exportCsv() {
@@ -474,7 +478,11 @@
       ui.sel = null;
       ui.detail = null;
     } else if (act === 'reset') {
-      if (!window.confirm('Recharger les données de la GAANA ? Vos modifications seront perdues.')) return;
+      if (!ui.armed) {
+        ui.armed = true;
+        b.textContent = 'Cliquer à nouveau : vos modifications seront perdues';
+        return;
+      }
       state = D.gaana();
       ui.sel = null;
       ui.detail = null;
@@ -492,6 +500,7 @@
     } else {
       return;
     }
+    ui.armed = false;
     save();
     render();
   });
