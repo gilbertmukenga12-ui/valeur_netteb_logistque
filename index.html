@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SAD-VNL — Valeur nette logistique</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="brand">
+        <h1>SAD-VNL</h1>
+        <p>Valeur nette logistique et pilotage de la performance</p>
+      </div>
+      <nav id="nav" aria-label="Sections">
+        <button data-view="dashboard">Tableau de bord</button>
+        <button data-view="data">Données</button>
+        <button data-view="detail">Sous-indicateurs</button>
+        <button data-view="amdec">AMDEC</button>
+        <button data-view="budget">Budget</button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="view" class="wrap" tabindex="-1"></main>
+
+  <footer class="wrap foot">
+    <p>Prototype issu du mémoire de Master 2 (Université de Kinshasa, GEOT, 2025-2026). Montants en millions de francs congolais (M FC). Les données chargées par défaut sont celles de la GAANA, 2018-2022.</p>
+  </footer>
+
+  <script src="js/model.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
