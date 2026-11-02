@@ -1,500 +1,405 @@
-/* Interface du SAD-VNL : tableau de bord, saisie des données, sous-indicateurs, AMDEC, budget. */
-(function () {
+/*
+ * Interface du VNL-SAD : navigation, connexion, calcul en cache et écrans 1 à 4
+ * (tableau de bord du mois, évolution, diagnostic, alertes).
+ * Les autres écrans sont dans app-saisie.js, app-actions.js, app-params.js et app-admin.js.
+ */
+(function (root) {
   'use strict';
 
-  var M = window.VNLModel;
-  var D = window.VNLData;
-  var KEY = 'sad-vnl-v1';
-  var DIMS = D.DIMENSIONS;
-  var COLORS = { alpha: 'var(--c-alpha)', omega: 'var(--c-omega)', gamma: 'var(--c-gamma)', rz: 'var(--c-rz)', xe: 'var(--c-xe)' };
+  var C = root.VNLConfig, M = root.VNLModel, S = root.VNLStore, I = root.VNLImporter;
+  var App = root.App = { views: {}, charts: [] };
 
-  var state = load();
-  var ui = { view: 'dashboard', sel: null, detail: null };
-  var viewEl = document.getElementById('view');
+  var ROLES = [
+    { code: 'pdg', label: 'PDG' },
+    { code: 'admin', label: 'Administrateur' },
+    { code: 'direction', label: 'Direction (P1)' },
+    { code: 'achat', label: 'Achat (P2)' },
+    { code: 'production', label: 'Production (P3)' },
+    { code: 'commercial', label: 'Commercial (P4)' },
+    { code: 'comptabilite', label: 'Comptabilité (P5)' },
+    { code: 'operateur', label: 'Opérateur de saisie' }
+  ];
+  App.ROLES = ROLES;
 
-  /* ---------- utilitaires ---------- */
+  /* ---------- Formats (F11.1) ---------- */
+  function isNum(x) { return typeof x === 'number' && isFinite(x); }
+  function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function mfc(x, unit) { return isNum(x) ? I.formatNumber(x / 1e6, 2) + (unit === false ? '' : ' M FC') : '—'; }
+  function idx(x) { return isNum(x) ? I.formatNumber(x, 3) : '—'; }
+  function pct(x, d) { return isNum(x) ? I.formatNumber(x * 100, d === undefined ? 1 : d) + ' %' : '—'; }
+  function num(x, d) { return isNum(x) ? I.formatNumber(x, d) : '—'; }
+  var MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+  function moisLabel(m) { if (!m) return ''; var p = m.split('-'); return MOIS[+p[1] - 1] + ' ' + p[0]; }
+  App.fmt = { isNum: isNum, esc: esc, mfc: mfc, idx: idx, pct: pct, num: num, moisLabel: moisLabel };
 
-  function load() {
-    try {
-      var raw = localStorage.getItem(KEY);
-      if (raw) {
-        var s = JSON.parse(raw);
-        if (s && s.params && s.params.expo && Array.isArray(s.years) && s.years.length && Array.isArray(s.amdec) && Array.isArray(s.actions) && s.weights) return s;
+  /* ---------- Calcul en cache ---------- */
+  var cache = null;
+  S.onChange(function () { cache = null; });
+  App.calc = function () {
+    if (cache) return cache;
+    var p = S.params();
+    var months = S.months().filter(function (m) { return isNum(m.ca) && isNum(m.cmv); });
+    var ref = M.referenceYear(months, p, p.anneeReference);
+    var actions = M.evaluateActions(S.base.actions, ref, p);
+    var res = M.computeAll(months, p, actions);
+    res.mois.forEach(function (r) { r.versionParams = S.base.parametres.active; });
+    cache = { params: p, months: months, ref: ref, actions: actions, res: res };
+    return cache;
+  };
+  App.invalidate = function () { cache = null; };
+
+  /* ---------- Navigation ---------- */
+  var NAV = [
+    { v: 'mois', label: 'Tableau de bord' },
+    { v: 'evolution', label: 'Évolution' },
+    { v: 'diagnostic', label: 'Diagnostic' },
+    { v: 'alertes', label: 'Alertes' },
+    { v: 'actions', label: 'Actions' },
+    { v: 'saisie', label: 'Saisie et import' },
+    { v: 'parametres', label: 'Paramètres et méthode' },
+    { v: 'analyses', label: 'Analyses' },
+    { v: 'admin', label: 'Administration' }
+  ];
+
+  App.state = { view: 'mois', mois: null };
+
+  App.go = function (view, extra) {
+    App.state.view = view;
+    if (extra) Object.keys(extra).forEach(function (k) { App.state[k] = extra[k]; });
+    try { root.sessionStorage.setItem('vnlsad.vue', view); } catch (e) { /* stockage indisponible */ }
+    App.render();
+  };
+
+  App.toast = function (msg, kind) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + (kind || '');
+    clearTimeout(App._t);
+    App._t = setTimeout(function () { t.className = 'toast'; }, 3500);
+  };
+
+  function destroyCharts() { App.charts.forEach(function (c) { c.destroy(); }); App.charts = []; }
+
+  App.render = function () {
+    destroyCharts();
+    var main = document.getElementById('view');
+    var nav = document.getElementById('nav');
+    var u = S.user();
+    document.getElementById('who').innerHTML = u ? esc(u.nom) + ' · <button class="link" data-act="logout">Se déconnecter</button>' : '';
+    if (!S.base.utilisateurs.length) { nav.innerHTML = ''; main.innerHTML = firstRun(); bind(main); return; }
+    if (!u) { nav.innerHTML = ''; main.innerHTML = loginView(); bind(main); return; }
+    nav.innerHTML = NAV.map(function (n) {
+      return '<button data-go="' + n.v + '"' + (App.state.view === n.v ? ' aria-current="page"' : '') + '>' + n.label + '</button>';
+    }).join('');
+    var view = App.views[App.state.view] || App.views.mois;
+    main.innerHTML = view.html();
+    bind(main);
+    if (view.after) view.after(main);
+    main.focus({ preventScroll: true });
+  };
+
+  /* Délégation d'événements : data-go (navigation), data-act (actions déclarées par les vues). */
+  App.actions = {};
+  function bind(el) {
+    el.querySelectorAll('[data-help]').forEach(function (x) { x.title = x.getAttribute('data-help'); });
+  }
+  document.addEventListener('click', function (e) {
+    var g = e.target.closest('[data-go]');
+    if (g) { App.go(g.getAttribute('data-go'), g.dataset.mois ? { mois: g.dataset.mois } : null); return; }
+    var a = e.target.closest('[data-act]');
+    if (a && App.actions[a.getAttribute('data-act')]) { e.preventDefault(); App.actions[a.getAttribute('data-act')](a, e); }
+  });
+  document.addEventListener('change', function (e) {
+    var a = e.target.closest('[data-change]');
+    if (a && App.actions[a.getAttribute('data-change')]) App.actions[a.getAttribute('data-change')](a, e);
+  });
+
+  /* ---------- Premier lancement et connexion ---------- */
+  function firstRun() {
+    return '<section class="card narrow"><h2>Premier lancement</h2>' +
+      '<p>Créez le compte de l’administrateur. Il pourra ensuite créer les comptes des responsables, du PDG et de l’opérateur de saisie.</p>' +
+      '<form id="first" class="form">' +
+      '<label>Nom<input name="nom" required autocomplete="name"></label>' +
+      '<label>Mot de passe<input name="pw" type="password" required minlength="4" autocomplete="new-password"></label>' +
+      '<fieldset><legend>Rôles de ce compte</legend>' + ROLES.map(function (r) {
+        return '<label class="check"><input type="checkbox" name="roles" value="' + r.code + '"' + (r.code === 'admin' ? ' checked' : '') + '> ' + r.label + '</label>';
+      }).join('') + '</fieldset>' +
+      '<p class="hint">Pour une démonstration sur un seul poste, cochez tous les rôles.</p>' +
+      '<button class="primary" data-act="first">Créer le compte</button></form></section>';
+  }
+  App.actions.first = function () {
+    var f = document.getElementById('first');
+    if (!f.reportValidity()) return;
+    var roles = Array.prototype.map.call(f.querySelectorAll('[name=roles]:checked'), function (x) { return x.value; });
+    if (roles.indexOf('admin') < 0) roles.push('admin');
+    var u = S.addUser(f.nom.value.trim(), roles, f.pw.value, 'A1');
+    S.setUser(u);
+    App.go(S.months().length ? 'mois' : 'saisie');
+  };
+
+  function loginView() {
+    var users = S.base.utilisateurs.filter(function (u) { return u.actif; });
+    return '<section class="card narrow"><h2>Connexion</h2><form id="login" class="form">' +
+      '<label>Utilisateur<select name="id">' + users.map(function (u) { return '<option value="' + u.id + '">' + esc(u.nom) + '</option>'; }).join('') + '</select></label>' +
+      '<label>Mot de passe<input name="pw" type="password" required autocomplete="current-password"></label>' +
+      '<button class="primary" data-act="login">Entrer</button></form></section>';
+  }
+  App.actions.login = function () {
+    var f = document.getElementById('login');
+    var u = S.login(f.id.value, f.pw.value);
+    if (!u) { App.toast('Mot de passe incorrect.', 'err'); return; }
+    var v = 'mois';
+    try { v = root.sessionStorage.getItem('vnlsad.vue') || v; } catch (e) { /* rien */ }
+    App.go(S.months().length ? v : 'saisie');
+  };
+  App.actions.logout = function () { S.setUser(null); App.render(); };
+
+  /* ---------- Outils communs ---------- */
+  App.monthSelect = function (current, act) {
+    var r = App.calc().res.mois;
+    return '<label class="inline">Mois <select data-change="' + (act || 'pickMonth') + '">' + r.slice().reverse().map(function (x) {
+      return '<option value="' + x.mois + '"' + (x.mois === current ? ' selected' : '') + '>' + moisLabel(x.mois) + '</option>';
+    }).join('') + '</select></label>';
+  };
+  App.actions.pickMonth = function (el) { App.state.mois = el.value; App.render(); };
+
+  App.currentMonth = function () {
+    var r = App.calc().res.mois;
+    if (!r.length) return null;
+    var m = App.state.mois;
+    var found = r.filter(function (x) { return x.mois === m; })[0];
+    return found || r[r.length - 1];
+  };
+
+  App.empty = function () {
+    return '<section class="card"><h2>Aucun mois calculé</h2><p>Saisissez ou importez au moins un mois (chiffre d’affaires et coût des marchandises vendues compris) pour voir les résultats.</p>' +
+      '<button class="primary" data-go="saisie">Aller à la saisie</button></section>';
+  };
+
+  var DIMS = { alpha: 'α efficacité', omega: 'Ω stocks', gamma: 'γ réactivité', hostilite: 'Hostilité' };
+  App.DIMS = DIMS;
+
+  function voyant(v) {
+    var t = { vert: 'Situation normale', orange: 'Vigilance', rouge: 'Alerte' }[v] || '';
+    return '<span class="voyant ' + v + '" role="img" aria-label="' + t + '"></span><span class="voyant-label">' + t + '</span>';
+  }
+  App.voyant = voyant;
+
+  function delta(cur, prev, f, inverse) {
+    if (!isNum(cur) || !isNum(prev)) return '';
+    var d = cur - prev;
+    var good = inverse ? d < 0 : d > 0;
+    var s = (d > 0 ? '+' : '') + f(d);
+    return '<span class="delta ' + (Math.abs(d) < 1e-9 ? '' : (good ? 'up' : 'down')) + '">' + s + ' sur un mois</span>';
+  }
+
+  App.chart = function (canvas, cfg) {
+    if (!root.Chart) return null;
+    var css = getComputedStyle(document.documentElement);
+    root.Chart.defaults.color = css.getPropertyValue('--muted').trim();
+    root.Chart.defaults.borderColor = css.getPropertyValue('--grid').trim();
+    root.Chart.defaults.font.family = css.getPropertyValue('--font').trim();
+    var c = new root.Chart(canvas, cfg);
+    App.charts.push(c);
+    return c;
+  };
+  App.color = function (name) { return getComputedStyle(document.documentElement).getPropertyValue('--' + name).trim(); };
+
+  /* ---------- 1. Tableau de bord du mois ---------- */
+  App.views.mois = {
+    html: function () {
+      var c = App.calc();
+      var r = App.currentMonth();
+      if (!r) return App.empty();
+      var all = c.res.mois, k = all.indexOf(r), prev = all[k - 1];
+      var rec = S.getMonth(r.mois);
+      var h = '<div class="head-row"><h2>Tableau de bord du mois</h2>' + App.monthSelect(r.mois) + '</div>';
+      h += '<section class="card hero ' + r.voyant + '">' +
+        '<div class="hero-top">' + voyant(r.voyant) + '<span class="muted">' + moisLabel(r.mois) + (rec && rec.cloture ? ' · mois clôturé' : ' · mois non clôturé') + ' · paramètres ' + esc(r.versionParams) + '</span></div>' +
+        '<p class="phrase"><strong>Que faire ce mois-ci ?</strong> ' + esc(r.phrase) + '</p></section>';
+      h += '<div class="tiles">' +
+        tile('VNL', mfc(r.vnl), delta(r.vnl, prev && prev.vnl, function (d) { return mfc(d); }), 'Valeur que la logistique laisse à l’entreprise après pertes, inefficacités, hostilité et coûts.') +
+        tile('VNL / VMB', pct(r.ratio), delta(r.ratio, prev && prev.ratio, function (d) { return I.formatNumber(d * 100, 1) + ' pt'; }), 'Part de la marge brute que la logistique préserve. Seuil d’alerte : ' + pct(c.params.seuilRatio, 2) + '.') +
+        tile('Ψ conversion', idx(r.psi), delta(r.psi, prev && prev.psi, idx), 'Taux de conversion opérationnelle : 1 si α, Ω et γ atteignent leurs cibles.') +
+        tile('Φ environnement', idx(r.phi), delta(r.phi, prev && prev.phi, idx), 'Part de la valeur qui résiste à l’hostilité non absorbée par la résilience.') +
+        '</div>';
+      if (r.alertes.length) {
+        h += '<section class="card"><h3>Alertes du mois</h3><ul class="alerts">' + r.alertes.map(function (a) {
+          return '<li><strong>' + esc(a.label) + '</strong> : ' + (a.regle === 'baisse' ? I.formatNumber(a.valeur * 100, 1) + ' pt (seuil ' + I.formatNumber(a.seuil * 100, 1) + ' pt)' : idx(a.valeur) + ' (seuil ' + idx(a.seuil) + ')') + '</li>';
+        }).join('') + '</ul><p>Dimension en cause : <strong>' + DIMS[r.dimEnCause] + '</strong> (' + pct(r.contrib[r.dimEnCause]) + ' de la perte de conversion).' +
+          (r.action ? (r.actionDirecte ? ' Action prioritaire' : ' À défaut d’action ciblée') + ' : <strong>n° ' + r.action.n + ' ' + esc(r.action.nom) + '</strong>, VAN ' + mfc(r.action.van) + '.' : '') + '</p></section>';
       }
-    } catch (e) { /* stockage indisponible : on repart des données par défaut */ }
-    return D.gaana();
-  }
-
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignoré */ }
-  }
-
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
-  function fmt(n, d) {
-    if (typeof n !== 'number' || !isFinite(n)) return '—';
-    return n.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
-  }
-
-  function val(x) {
-    return typeof x === 'number' && isFinite(x) ? String(x).replace('.', ',') : '';
-  }
-
-  function parseNum(s) {
-    var t = String(s).trim().replace(/\s/g, '').replace(',', '.');
-    if (t === '') return null;
-    var n = Number(t);
-    return isFinite(n) ? n : null;
-  }
-
-  function setOut(id, html) {
-    var el = viewEl.querySelector('[data-out="' + id + '"]');
-    if (el) el.innerHTML = html;
-  }
-
-  function statusClass(s) {
-    if (s === 'Création élevée') return 'b-good';
-    if (s === 'Création moyenne' || s === 'Reprise fragile') return 'b-warn';
-    return 'b-bad';
-  }
-
-  function levelClass(l) {
-    return l === 'Critique' ? 'b-bad' : l === 'Majeur' ? 'b-warn' : 'b-good';
-  }
-
-  function badge(text, cls) {
-    return '<span class="badge ' + cls + '">' + esc(text) + '</span>';
-  }
-
-  function results() {
-    return M.computeAll(state.years, state.params);
-  }
-
-  function numInput(attrs, v) {
-    return '<input type="text" inputmode="decimal" ' + attrs + ' value="' + esc(val(v)) + '">';
-  }
-
-  /* ---------- graphiques SVG ---------- */
-
-  function niceMax(v) {
-    if (!(v > 0)) return 1;
-    var p = Math.pow(10, Math.floor(Math.log10(v)));
-    var m = v / p;
-    var n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
-    return n * p;
-  }
-
-  function barChart(res, sel) {
-    var W = 640, H = 290, L = 56, R = 12, T = 24, B = 30;
-    var top = niceMax(Math.max.apply(null, res.map(function (r) { return r.vnl; }).concat([1])));
-    var pw = W - L - R, ph = H - T - B;
-    var slot = pw / res.length, bw = Math.min(70, slot * 0.6);
-    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="VNL par année">';
-    for (var t = 0; t <= 4; t++) {
-      var y = T + ph - (ph * t) / 4;
-      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="var(--line)"/>';
-      s += '<text x="' + (L - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + fmt((top * t) / 4, 0) + '</text>';
+      if (r.manquants.length) h += '<p class="warn">Données manquantes ce mois-ci, moyenne calculée sur les sous-indicateurs disponibles : ' + esc(r.manquants.join(', ')) + '.</p>';
+      h += '<div class="btns"><button data-go="diagnostic" data-mois="' + r.mois + '">Voir le diagnostic</button><button data-act="printMonth" data-mois="' + r.mois + '">Imprimer le bilan du mois</button></div>';
+      return h;
     }
-    res.forEach(function (r, i) {
-      var h = Math.max(0, (r.vnl / top) * ph);
-      var x = L + slot * i + (slot - bw) / 2;
-      s += '<rect x="' + x + '" y="' + (T + ph - h) + '" width="' + bw + '" height="' + h + '" rx="3" fill="var(--accent)" opacity="' + (i === sel ? 1 : 0.5) + '"/>';
-      s += '<text class="val" x="' + (x + bw / 2) + '" y="' + (T + ph - h - 6) + '" text-anchor="middle">' + fmt(r.vnl, 0) + '</text>';
-      s += '<text x="' + (x + bw / 2) + '" y="' + (H - 10) + '" text-anchor="middle">' + esc(r.year) + '</text>';
-    });
-    return s + '</svg>';
+  };
+  function tile(label, value, d, help) {
+    return '<div class="tile" data-help="' + esc(help) + '"><div class="tile-label">' + label + '</div><div class="tile-value">' + value + '</div>' + (d || '') + '</div>';
   }
 
-  function lineChart(sel) {
-    var W = 640, H = 290, L = 40, R = 16, T = 16, B = 30;
-    var ys = state.years;
-    var keys = ['alpha', 'omega', 'gamma', 'rz', 'xe'];
-    var max = 1;
-    ys.forEach(function (y) { keys.forEach(function (k) { if (y.idx[k] > max) max = y.idx[k]; }); });
-    var top = Math.ceil(max * 4) / 4;
-    var pw = W - L - R, ph = H - T - B;
-    var xAt = function (i) { return ys.length === 1 ? L + pw / 2 : L + (pw * i) / (ys.length - 1); };
-    var yAt = function (v) { return T + ph - (v / top) * ph; };
-    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Évolution des cinq indices">';
-    for (var v = 0; v <= top + 1e-9; v += 0.25) {
-      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yAt(v) + '" y2="' + yAt(v) + '" stroke="var(--line)"/>';
-      s += '<text x="' + (L - 6) + '" y="' + (yAt(v) + 4) + '" text-anchor="end">' + fmt(v, 2) + '</text>';
-    }
-    if (sel !== null) s += '<line x1="' + xAt(sel) + '" x2="' + xAt(sel) + '" y1="' + T + '" y2="' + (T + ph) + '" stroke="var(--muted)" stroke-dasharray="3 3"/>';
-    keys.forEach(function (k) {
-      var pts = ys.map(function (y, i) { return xAt(i) + ',' + yAt(y.idx[k]); }).join(' ');
-      s += '<polyline points="' + pts + '" fill="none" style="stroke:' + COLORS[k] + '" stroke-width="2.2" stroke-linejoin="round"/>';
-      ys.forEach(function (y, i) { s += '<circle cx="' + xAt(i) + '" cy="' + yAt(y.idx[k]) + '" r="3" style="fill:' + COLORS[k] + '"/>'; });
-    });
-    ys.forEach(function (y, i) { s += '<text x="' + xAt(i) + '" y="' + (H - 10) + '" text-anchor="middle">' + esc(y.year) + '</text>'; });
-    return s + '</svg>';
-  }
-
-  /* ---------- tableau de bord ---------- */
-
-  function diagnostic(res, k) {
-    var r = res[k], y = state.years[k], i = y.idx, p = state.params, out = [];
-    if (k > 0) {
-      var prev = res[k - 1];
-      if (prev.vnl !== 0) {
-        var v = ((r.vnl - prev.vnl) / Math.abs(prev.vnl)) * 100;
-        out.push('La VNL ' + (v >= 0 ? 'progresse' : 'recule') + ' de ' + fmt(Math.abs(v), 1) + ' % par rapport à ' + prev.year + '.');
-      }
-    }
-    var names = { alpha: 'α (efficacité opérationnelle)', omega: 'Ω (gestion des stocks)', gamma: 'γ (conversion marchande)', rz: 'Rz (résilience)' };
-    var weak = Object.keys(names).reduce(function (a, b) { return i[b] < i[a] ? b : a; });
-    out.push('Maillon faible : ' + names[weak] + ', à ' + fmt(i[weak], 2) + '. Comme l’agrégation est multiplicative, c’est là qu’un effort rapporte le plus.');
-    if (r.delta < -0.005) out.push('L’incertitude (Xe = ' + fmt(i.xe, 2) + ') dépasse la résilience (Rz = ' + fmt(i.rz, 2) + ') : l’environnement atténue la valeur créée (Φ = ' + fmt(r.phi, 3) + ').');
-    else if (r.delta > 0.1) out.push('La résilience (Rz = ' + fmt(i.rz, 2) + ') dépasse nettement l’incertitude (Xe = ' + fmt(i.xe, 2) + ') : l’environnement amplifie la valeur créée (Φ = ' + fmt(r.phi, 3) + ').');
-    else out.push('Résilience et incertitude s’équilibrent (Rz = ' + fmt(i.rz, 2) + ', Xe = ' + fmt(i.xe, 2) + ') : l’environnement est à peu près neutre (Φ = ' + fmt(r.phi, 3) + ').');
-    var vnl0 = y.vmb * (1 - p.tau) * r.psi * Math.exp(p.theta * i.rz) - y.clog;
-    if (vnl0 - r.vnl > 0.5 && vnl0 > 0) {
-      out.push('Sans incertitude environnementale (Xe = 0), la VNL serait de ' + fmt(vnl0, 1) + ' M FC : l’environnement coûte ' + fmt(vnl0 - r.vnl, 1) + ' M FC, soit ' + fmt(((vnl0 - r.vnl) / vnl0) * 100, 0) + ' % de la valeur potentielle.');
-    }
-    return out;
-  }
-
-  function renderDashboard() {
-    var res = results();
-    if (ui.sel === null || ui.sel >= res.length) ui.sel = res.length - 1;
-    var r = res[ui.sel];
-    var opts = res.map(function (x, i) { return '<option value="' + i + '"' + (i === ui.sel ? ' selected' : '') + '>' + esc(x.year) + '</option>'; }).join('');
-    var legend = [['alpha', 'α Efficacité'], ['omega', 'Ω Stocks'], ['gamma', 'γ Conversion'], ['rz', 'Rz Résilience'], ['xe', 'Xe Incertitude']]
-      .map(function (a) { return '<span><i style="background:' + COLORS[a[0]] + '"></i>' + a[1] + '</span>'; }).join('');
-    var rows = res.map(function (x, i) {
-      return '<tr><td>' + esc(x.year) + '</td><td>' + fmt(x.vmb, 1) + '</td><td>' + fmt(x.clog, 1) + '</td><td>' + fmt(x.psi, 3) + '</td><td>' + fmt(x.phi, 3) +
-        '</td><td>' + fmt(x.delta, 2) + '</td><td><b>' + fmt(x.vnl, 1) + '</b></td><td>' + fmt(x.ratio * 100, 1) + ' %</td><td class="left">' + badge(x.status, statusClass(x.status)) + '</td></tr>';
-    }).join('');
-    viewEl.innerHTML =
-      '<h2>Tableau de bord</h2>' +
-      '<p class="lead">La logistique crée-t-elle ou détruit-elle de la valeur ? La VNL répond en francs congolais, après coûts logistiques et effet de l’environnement.</p>' +
-      '<div class="row"><label>Année analysée<select data-a="sel">' + opts + '</select></label>' +
-      '<button class="btn" data-do="csv">Exporter les résultats (CSV)</button></div>' +
-      '<div class="kpis">' +
-      '<div class="kpi"><div class="l">VNL</div><div class="v">' + fmt(r.vnl, 1) + '</div><div class="s">M FC</div></div>' +
-      '<div class="kpi"><div class="l">VNL / VMB</div><div class="v">' + fmt(r.ratio * 100, 1) + ' %</div><div class="s">part de valeur conservée</div></div>' +
-      '<div class="kpi"><div class="l">Ψ conversion</div><div class="v">' + fmt(r.psi, 3) + '</div><div class="s">α · Ω · γ</div></div>' +
-      '<div class="kpi"><div class="l">Φ environnement</div><div class="v">' + fmt(r.phi, 3) + '</div><div class="s">Δ = Rz − Xe = ' + fmt(r.delta, 2) + '</div></div>' +
-      '<div class="kpi"><div class="l">Régime</div><div class="v" style="font-size:16px;padding-top:6px">' + badge(r.status, statusClass(r.status)) + '</div></div>' +
-      '</div>' +
-      '<div class="card diag"><h3>Lecture automatique, ' + esc(r.year) + '</h3>' + diagnostic(res, ui.sel).map(function (t) { return '<p>' + esc(t) + '</p>'; }).join('') + '</div>' +
-      '<div class="charts">' +
-      '<div class="card chart"><h3>VNL par année (M FC)</h3>' + barChart(res, ui.sel) + '</div>' +
-      '<div class="card chart"><h3>Les cinq indices</h3>' + lineChart(ui.sel) + '<div class="legend">' + legend + '</div></div>' +
-      '</div>' +
-      '<div class="card"><h3>Résultats par année</h3><div class="tablewrap"><table><thead><tr><th>Année</th><th>VMB</th><th>Clog</th><th>Ψ</th><th>Φ</th><th>Δ</th><th>VNL</th><th>VNL/VMB</th><th class="left">Régime</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<p class="note">VNL = VMB × (1 − τ) × Ψ × Φ − Clog, avec τ = ' + fmt(state.params.tau * 100, 0) + ' % et θ = ' + fmt(state.params.theta, 2) + '. Les montants sont en M FC. Le mémoire arrondit Ψ et Φ avant de multiplier, d’où des écarts de l’ordre de 1 % avec ses tableaux.</p></div>';
-  }
-
-  function exportCsv() {
-    var res = results();
-    var lines = [['Année', 'VMB (M FC)', 'Clog (M FC)', 'α', 'Ω', 'γ', 'Rz', 'Xe', 'Ψ', 'Φ', 'VNL (M FC)', 'VNL/VMB', 'Régime']];
-    res.forEach(function (r, i) {
-      var x = state.years[i].idx;
-      lines.push([r.year, r.vmb, r.clog, x.alpha, x.omega, x.gamma, x.rz, x.xe, r.psi.toFixed(4), r.phi.toFixed(4), r.vnl.toFixed(1), (r.ratio * 100).toFixed(1) + ' %', r.status]);
-    });
-    var csv = '﻿' + lines.map(function (l) { return l.map(function (c) { return String(c).replace('.', ','); }).join(';'); }).join('\n');
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = 'vnl-resultats.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
-
-  /* ---------- données ---------- */
-
-  function renderData() {
-    var p = state.params;
-    var rows = state.years.map(function (y, i) {
-      var f = function (field, v) { return '<td class="num-in">' + numInput('data-a="yf" data-i="' + i + '" data-f="' + field + '"', v) + '</td>'; };
-      return '<tr>' + f('year', y.year) + f('vmb', y.vmb) + f('clog', y.clog) +
-        f('idx.alpha', y.idx.alpha) + f('idx.omega', y.idx.omega) + f('idx.gamma', y.idx.gamma) + f('idx.rz', y.idx.rz) + f('idx.xe', y.idx.xe) +
-        '<td data-out="psi:' + i + '"></td><td data-out="phi:' + i + '"></td><td data-out="vnl:' + i + '"></td>' +
-        '<td><button class="x" title="Supprimer cette année" data-do="delyear" data-i="' + i + '">×</button></td></tr>';
-    }).join('');
-    viewEl.innerHTML =
-      '<h2>Données</h2>' +
-      '<p class="lead">Saisissez, pour chaque année, la valeur marchande brute (VMB), les coûts logistiques (Clog) et les cinq indices. Les indices peuvent aussi être calculés depuis l’onglet « Sous-indicateurs ».</p>' +
-      '<div class="card"><h3>Paramètres du modèle</h3><div class="row">' +
-      '<label>Taux τ (taxes et prélèvements)' + numInput('data-a="param" data-k="tau"', p.tau) + '</label>' +
-      '<label>Sensibilité θ (Φ)' + numInput('data-a="param" data-k="theta"', p.theta) + '</label>' +
-      '<label>Exposant de α' + numInput('data-a="expo" data-k="alpha"', p.expo.alpha) + '</label>' +
-      '<label>Exposant de Ω' + numInput('data-a="expo" data-k="omega"', p.expo.omega) + '</label>' +
-      '<label>Exposant de γ' + numInput('data-a="expo" data-k="gamma"', p.expo.gamma) + '</label>' +
-      '</div><p class="hint">Valeurs du mémoire : τ = 0,16 ; θ = 0,35 ; exposants 0,40 / 0,35 / 0,25 (poids AHP des trois dimensions).</p></div>' +
-      '<div class="card"><h3>Données annuelles</h3><div class="tablewrap"><table><thead><tr><th>Année</th><th>VMB</th><th>Clog</th><th>α</th><th>Ω</th><th>γ</th><th>Rz</th><th>Xe</th><th>Ψ</th><th>Φ</th><th>VNL</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<div class="row" style="margin-top:12px"><button class="btn" data-do="addyear">Ajouter une année</button><button class="btn danger" data-do="reset">Recharger les données de la GAANA</button></div>' +
-      '<p class="hint">Les modifications sont enregistrées automatiquement dans ce navigateur.</p></div>';
-    fillData();
-  }
-
-  function fillData() {
-    results().forEach(function (r, i) {
-      setOut('psi:' + i, fmt(r.psi, 3));
-      setOut('phi:' + i, fmt(r.phi, 3));
-      setOut('vnl:' + i, '<b>' + fmt(r.vnl, 1) + '</b>');
-    });
-  }
-
-  /* ---------- sous-indicateurs ---------- */
-
-  function entry(rec, code) {
-    return (rec.detail && rec.detail[code]) || {};
-  }
-
-  function normOf(rec, sub) {
-    var e = entry(rec, sub.code);
-    if (typeof e.ovr === 'number') return e.ovr;
-    return M.normalize(e.raw, e.p90, e.pol || sub.pol);
-  }
-
-  function renderDetail() {
-    if (ui.detail === null || ui.detail >= state.years.length) ui.detail = state.years.length - 1;
-    var rec = state.years[ui.detail];
-    var opts = state.years.map(function (y, i) { return '<option value="' + i + '"' + (i === ui.detail ? ' selected' : '') + '>' + esc(y.year) + '</option>'; }).join('');
-    var cards = DIMS.map(function (d) {
-      var rows = d.subs.map(function (s) {
-        var e = entry(rec, s.code);
-        var pol = e.pol || s.pol;
-        return '<tr><td class="left"><b>' + esc(s.code) + '</b></td><td class="left">' + esc(s.label) + '</td>' +
-          '<td class="num-in">' + numInput('data-a="w" data-code="' + esc(s.code) + '"', state.weights[s.code]) + '</td>' +
-          '<td class="num-in">' + numInput('data-a="det" data-f="raw" data-code="' + esc(s.code) + '"', e.raw) + '</td>' +
-          '<td class="num-in">' + numInput('data-a="det" data-f="p90" data-code="' + esc(s.code) + '"', e.p90) + '</td>' +
-          '<td><select data-a="pol" data-code="' + esc(s.code) + '"><option value="direct"' + (pol === 'direct' ? ' selected' : '') + '>Directe</option><option value="inverse"' + (pol === 'inverse' ? ' selected' : '') + '>Inverse</option></select></td>' +
-          '<td class="num-in">' + numInput('data-a="det" data-f="ovr" data-code="' + esc(s.code) + '"', e.ovr) + '</td>' +
-          '<td data-out="norm:' + esc(s.code) + '"></td></tr>';
-      }).join('');
-      return '<div class="card"><h3>' + d.sym + ' — ' + esc(d.label) + '</h3><div class="tablewrap"><table><thead><tr><th>Code</th><th class="left">Sous-indicateur</th><th>Poids</th><th>Valeur brute</th><th>P90</th><th>Polarité</th><th>Normalisée imposée</th><th>Normalisée retenue</th></tr></thead><tbody>' + rows +
-        '<tr class="sum"><td></td><td class="left">Indice ' + d.sym + '</td><td data-out="sum:' + d.id + '"></td><td colspan="4" class="left hint" data-out="cnt:' + d.id + '"></td><td data-out="idx:' + d.id + '"></td></tr></tbody></table></div></div>';
-    }).join('');
-    viewEl.innerHTML =
-      '<h2>Sous-indicateurs</h2>' +
-      '<p class="lead">Chaque sous-indicateur brut est ramené au P90 local : valeur / P90 pour une polarité directe, P90 / valeur pour une polarité inverse, bornée entre ' + M.NORM_MIN + ' et ' + M.NORM_MAX + '. L’indice d’une dimension est la moyenne pondérée des valeurs normalisées.</p>' +
-      '<div class="row"><label>Année<select data-a="detailyear">' + opts + '</select></label>' +
-      '<button class="btn primary" data-do="apply">Appliquer les indices à l’année ' + esc(rec.year) + '</button><span class="hint" id="applymsg"></span></div>' +
-      '<p class="note">Une valeur « normalisée imposée » remplace le calcul : elle permet de reprendre telles quelles les valeurs normalisées publiées dans le mémoire (tableau III-3, année 2022).</p>' +
-      cards;
-    fillDetail();
-  }
-
-  function fillDetail() {
-    var rec = state.years[ui.detail];
-    DIMS.forEach(function (d) {
-      var items = [], filled = 0, sum = 0;
-      d.subs.forEach(function (s) {
-        var n = normOf(rec, s);
-        setOut('norm:' + s.code, fmt(n, 2));
-        sum += state.weights[s.code] || 0;
-        if (isFinite(n)) { filled++; items.push({ w: state.weights[s.code] || 0, v: n }); }
+  /* ---------- 2. Évolution ---------- */
+  App.views.evolution = {
+    html: function () {
+      var c = App.calc();
+      if (!c.res.mois.length) return App.empty();
+      var ms = c.res.mois.map(function (r) { return r.mois; });
+      var from = App.state.evoFrom || ms[0], to = App.state.evoTo || ms[ms.length - 1];
+      function sel(name, v) { return '<select data-change="evoRange" name="' + name + '">' + ms.map(function (m) { return '<option' + (m === v ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select>'; }
+      var h = '<div class="head-row"><h2>Évolution</h2><div class="inline">Du ' + sel('evoFrom', from) + ' au ' + sel('evoTo', to) + '</div></div>';
+      h += '<section class="card"><h3>Ratio VNL/VMB et seuil d’alerte</h3><div class="chart"><canvas id="chRatio"></canvas></div></section>';
+      h += '<section class="card"><h3>Conversion Ψ et ses trois dimensions</h3><div class="chart"><canvas id="chPsi"></canvas></div></section>';
+      h += '<section class="card"><h3>Vue annuelle</h3>' + annualTable(c.res.annees) + '</section>';
+      return h;
+    },
+    after: function () {
+      var c = App.calc();
+      var ms = c.res.mois.map(function (r) { return r.mois; });
+      var from = App.state.evoFrom || ms[0], to = App.state.evoTo || ms[ms.length - 1];
+      var rs = c.res.mois.filter(function (r) { return r.mois >= from && r.mois <= to; });
+      var labels = rs.map(function (r) { return r.mois; });
+      App.chart(document.getElementById('chRatio'), {
+        type: 'line',
+        data: { labels: labels, datasets: [
+          { label: 'VNL/VMB', data: rs.map(function (r) { return r.ratio; }), borderColor: App.color('c1'), backgroundColor: App.color('c1'), pointRadius: rs.map(function (r) { return r.voyant === 'vert' ? 0 : 3; }), pointBackgroundColor: rs.map(function (r) { return App.color(r.voyant === 'rouge' ? 'bad' : r.voyant === 'orange' ? 'warn' : 'c1'); }), tension: 0.2 },
+          { label: 'Seuil', data: rs.map(function () { return c.params.seuilRatio; }), borderColor: App.color('bad'), borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 }
+        ] },
+        options: lineOpts(function (v) { return pct(v, 0); })
       });
-      setOut('sum:' + d.id, '<span style="' + (Math.abs(sum - 1) > 0.01 ? 'color:var(--warn)' : '') + '">' + fmt(sum, 3) + '</span>');
-      setOut('cnt:' + d.id, filled + ' / ' + d.subs.length + ' renseignés');
-      setOut('idx:' + d.id, filled ? fmt(M.weightedIndex(items), 3) : '—');
-    });
-  }
-
-  function applyDetail() {
-    var rec = state.years[ui.detail], done = [], skipped = [];
-    DIMS.forEach(function (d) {
-      var items = [];
-      d.subs.forEach(function (s) {
-        var n = normOf(rec, s);
-        if (isFinite(n)) items.push({ w: state.weights[s.code] || 0, v: n });
+      App.chart(document.getElementById('chPsi'), {
+        type: 'line',
+        data: { labels: labels, datasets: [
+          { label: 'Ψ', data: rs.map(function (r) { return r.psi; }), borderColor: App.color('fg'), borderWidth: 2.5, pointRadius: 0 },
+          { label: 'α', data: rs.map(function (r) { return r.idx.alpha; }), borderColor: App.color('c1'), pointRadius: 0, borderWidth: 1.5 },
+          { label: 'Ω', data: rs.map(function (r) { return r.idx.omega; }), borderColor: App.color('c2'), pointRadius: 0, borderWidth: 1.5 },
+          { label: 'γ', data: rs.map(function (r) { return r.idx.gamma; }), borderColor: App.color('c3'), pointRadius: 0, borderWidth: 1.5 }
+        ] },
+        options: lineOpts(function (v) { return idx(v); })
       });
-      if (items.length === d.subs.length) {
-        rec.idx[d.id] = Math.round(M.weightedIndex(items) * 10000) / 10000;
-        done.push(d.sym);
-      } else {
-        skipped.push(d.sym);
-      }
-    });
-    save();
-    var msg = document.getElementById('applymsg');
-    if (msg) msg.textContent = (done.length ? 'Appliqué : ' + done.join(', ') + '. ' : '') + (skipped.length ? 'Incomplet, non modifié : ' + skipped.join(', ') + '.' : '');
-  }
-
-  /* ---------- AMDEC ---------- */
-
-  function renderAmdec() {
-    var rows = state.amdec.map(function (a, i) {
-      var f = function (field, v) { return '<td class="num-in">' + numInput('data-a="am" data-i="' + i + '" data-f="' + field + '"', v) + '</td>'; };
-      return '<tr><td class="left"><input type="text" data-a="am" data-i="' + i + '" data-f="name" value="' + esc(a.name) + '"></td>' + f('f', a.f) + f('g', a.g) + f('d', a.d) +
-        '<td data-out="crit:' + i + '"></td><td data-out="lvl:' + i + '"></td>' +
-        '<td class="num-in" style="text-align:left"><input type="text" data-a="am" data-i="' + i + '" data-f="dim" value="' + esc(a.dim) + '" style="width:90px;text-align:left"></td>' +
-        '<td><button class="x" title="Supprimer" data-do="delam" data-i="' + i + '">×</button></td></tr>';
-    }).join('');
-    viewEl.innerHTML =
-      '<h2>AMDEC</h2>' +
-      '<p class="lead">Analyse des modes de défaillance, de leurs effets et de leur criticité. Criticité = fréquence (F) × gravité (G) × détectabilité (D).</p>' +
-      '<div class="card"><div class="tablewrap"><table><thead><tr><th class="left">Défaillance</th><th>F</th><th>G</th><th>D</th><th>Criticité</th><th>Niveau</th><th class="left">Dimensions VNL</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<div class="row" style="margin-top:12px"><button class="btn" data-do="addam">Ajouter une défaillance</button><button class="btn" data-do="sortam">Trier par criticité</button></div>' +
-      '<p class="note">Seuils du mémoire : critique au-delà de 35, majeur de 20 à 35, modéré en dessous de 20.</p><div data-out="amsum"></div></div>';
-    fillAmdec();
-  }
-
-  function fillAmdec() {
-    var counts = { Critique: 0, Majeur: 0, 'Modéré': 0 };
-    state.amdec.forEach(function (a, i) {
-      var c = M.criticality(a.f, a.g, a.d), l = M.criticalityLevel(c);
-      counts[l]++;
-      setOut('crit:' + i, '<b>' + fmt(c, 0) + '</b>');
-      setOut('lvl:' + i, badge(l, levelClass(l)));
-    });
-    setOut('amsum', '<p class="hint">' + counts.Critique + ' critique(s), ' + counts.Majeur + ' majeur(s), ' + counts['Modéré'] + ' modéré(s).</p>');
-  }
-
-  /* ---------- budget ---------- */
-
-  function renderBudget() {
-    var rows = state.actions.map(function (a, i) {
-      var f = function (field, v) { return '<td class="num-in">' + numInput('data-a="act" data-i="' + i + '" data-f="' + field + '"', v) + '</td>'; };
-      return '<tr id="act' + i + '"><td>' + esc(a.id) + '</td><td class="left"><input type="text" data-a="act" data-i="' + i + '" data-f="name" value="' + esc(a.name) + '"></td>' + f('cost', a.cost) + f('gain', a.gain) +
-        '<td data-out="ratio:' + i + '"></td><td class="left"><input type="text" data-a="act" data-i="' + i + '" data-f="risk" value="' + esc(a.risk) + '" style="min-width:120px"></td>' +
-        '<td data-out="pick:' + i + '"></td><td><button class="x" title="Supprimer" data-do="delact" data-i="' + i + '">×</button></td></tr>';
-    }).join('');
-    viewEl.innerHTML =
-      '<h2>Budget d’actions correctives</h2>' +
-      '<p class="lead">Quelles actions financer pour gagner le plus de VNL avec un budget donné ? Le calcul est exact : il teste toutes les combinaisons possibles sans dépasser le budget.</p>' +
-      '<div class="card"><div class="row"><label>Budget disponible (M FC)' + numInput('data-a="budget"', state.budget) + '</label></div><div data-out="bsum"></div></div>' +
-      '<div class="card"><h3>Actions candidates</h3><div class="tablewrap"><table><thead><tr><th>N°</th><th class="left">Action</th><th>Coût (M FC)</th><th>Gain VNL (M FC)</th><th>Gain / coût</th><th class="left">Risque ciblé</th><th>Retenue</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<div class="row" style="margin-top:12px"><button class="btn" data-do="addact">Ajouter une action</button></div></div>' +
-      '<div class="card"><h3>Comparaison de scénarios</h3><div class="tablewrap" data-out="scen"></div></div>';
-    fillBudget();
-  }
-
-  function usableActions() {
-    return state.actions.filter(function (a) { return typeof a.cost === 'number' && a.cost >= 0 && typeof a.gain === 'number'; });
-  }
-
-  function fillBudget() {
-    var res = results(), ref = res[res.length - 1];
-    var acts = usableActions();
-    var o = M.optimize(acts, state.budget);
-    state.actions.forEach(function (a, i) {
-      setOut('ratio:' + i, a.cost > 0 ? fmt(a.gain / a.cost, 2) : '—');
-      var on = o.selected.indexOf(a.id) !== -1;
-      setOut('pick:' + i, on ? '✓' : '');
-      var tr = document.getElementById('act' + i);
-      if (tr) tr.classList.toggle('picked', on);
-    });
-    setOut('bsum',
-      '<div class="kpis" style="margin:0">' +
-      '<div class="kpi"><div class="l">Coût des actions retenues</div><div class="v">' + fmt(o.cost, 1) + '</div><div class="s">sur ' + fmt(state.budget, 1) + ' M FC</div></div>' +
-      '<div class="kpi"><div class="l">Gain de VNL</div><div class="v">' + fmt(o.gain, 1) + '</div><div class="s">M FC</div></div>' +
-      '<div class="kpi"><div class="l">Gain / coût</div><div class="v">' + (o.cost > 0 ? fmt(o.gain / o.cost, 2) : '—') + '</div><div class="s">ratio global</div></div>' +
-      '<div class="kpi"><div class="l">VNL ' + esc(ref.year) + ' après actions</div><div class="v">' + fmt(ref.vnl + o.gain, 1) + '</div><div class="s">au lieu de ' + fmt(ref.vnl, 1) + ' M FC</div></div></div>' +
-      '<p class="hint" style="margin-top:10px">Actions retenues : ' + (o.selected.length ? o.selected.join(', ') : 'aucune') + '.</p>');
-    var budgets = [100, 150, 200];
-    if (budgets.indexOf(state.budget) === -1 && state.budget > 0) budgets.push(state.budget);
-    budgets.sort(function (a, b) { return a - b; });
-    var srows = budgets.map(function (b) {
-      var s = M.optimize(acts, b);
-      return '<tr><td>' + fmt(b, 0) + '</td><td class="left">' + (s.selected.join(', ') || '—') + '</td><td>' + fmt(s.cost, 1) + '</td><td>' + fmt(s.gain, 1) + '</td><td>' + fmt(ref.vnl + s.gain, 1) + '</td><td>' + (s.cost > 0 ? fmt(s.gain / s.cost, 2) : '—') + '</td></tr>';
-    }).join('');
-    setOut('scen', '<table><thead><tr><th>Budget</th><th class="left">Actions retenues</th><th>Coût</th><th>Gain</th><th>VNL après</th><th>Gain / coût</th></tr></thead><tbody>' + srows + '</tbody></table>');
-  }
-
-  /* ---------- navigation et événements ---------- */
-
-  function render() {
-    Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (b) {
-      b.classList.toggle('on', b.dataset.view === ui.view);
-    });
-    ({ dashboard: renderDashboard, data: renderData, detail: renderDetail, amdec: renderAmdec, budget: renderBudget })[ui.view]();
-  }
-
-  document.getElementById('nav').addEventListener('click', function (e) {
-    var b = e.target.closest('button[data-view]');
-    if (!b) return;
-    ui.view = b.dataset.view;
-    render();
-    window.scrollTo(0, 0);
-  });
-
-  function setPath(obj, path, v) {
-    var parts = path.split('.');
-    while (parts.length > 1) obj = obj[parts.shift()];
-    obj[parts[0]] = v;
-  }
-
-  viewEl.addEventListener('input', function (e) {
-    var t = e.target, a = t.dataset.a;
-    if (!a) return;
-    var n = t.type === 'text' && t.inputMode === 'decimal' ? parseNum(t.value) : null;
-    var i = Number(t.dataset.i);
-    if (a === 'param') { state.params[t.dataset.k] = n === null ? 0 : n; fillData(); }
-    else if (a === 'expo') { state.params.expo[t.dataset.k] = n === null ? 0 : n; fillData(); }
-    else if (a === 'yf') { setPath(state.years[i], t.dataset.f, n === null ? 0 : n); fillData(); }
-    else if (a === 'w') { state.weights[t.dataset.code] = n === null ? 0 : n; fillDetail(); }
-    else if (a === 'det') {
-      var rec = state.years[ui.detail];
-      rec.detail = rec.detail || {};
-      rec.detail[t.dataset.code] = rec.detail[t.dataset.code] || {};
-      rec.detail[t.dataset.code][t.dataset.f] = n;
-      fillDetail();
     }
-    else if (a === 'am') { state.amdec[i][t.dataset.f] = t.inputMode === 'decimal' ? (n === null ? 0 : n) : t.value; fillAmdec(); }
-    else if (a === 'act') { state.actions[i][t.dataset.f] = t.inputMode === 'decimal' ? n : t.value; fillBudget(); }
-    else if (a === 'budget') { state.budget = n === null ? 0 : n; fillBudget(); }
-    else return;
-    save();
-  });
+  };
+  App.actions.evoRange = function (el) { App.state[el.name] = el.value; App.render(); };
 
-  viewEl.addEventListener('change', function (e) {
-    var t = e.target, a = t.dataset.a;
-    if (a === 'sel') { ui.sel = Number(t.value); renderDashboard(); }
-    else if (a === 'detailyear') { ui.detail = Number(t.value); renderDetail(); }
-    else if (a === 'pol') {
-      var rec = state.years[ui.detail];
-      rec.detail = rec.detail || {};
-      rec.detail[t.dataset.code] = rec.detail[t.dataset.code] || {};
-      rec.detail[t.dataset.code].pol = t.value;
-      save();
-      fillDetail();
+  function lineOpts(fy) {
+    return {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip: { callbacks: { label: function (x) { return x.dataset.label + ' : ' + fy(x.parsed.y); } } } },
+      scales: { y: { ticks: { callback: fy } }, x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } } }
+    };
+  }
+  App.lineOpts = lineOpts;
+
+  function annualTable(years) {
+    var h = '<div class="scroll"><table class="num"><thead><tr><th>Année</th><th>VMB</th><th>Pertes physiques</th><th>Inefficacité de conversion</th><th>Effet de l’hostilité</th><th>Coûts logistiques</th><th>VNL</th><th>VNL/VMB</th></tr></thead><tbody>';
+    years.forEach(function (a) {
+      h += '<tr><th>' + a.annee + (a.n < 12 ? ' <small>(' + a.n + ' mois)</small>' : '') + '</th><td>' + mfc(a.vmb, false) + '</td><td>' + mfc(a.retraits.pertes, false) + '</td><td>' + mfc(a.retraits.inefficacite, false) + '</td><td>' + mfc(a.retraits.hostilite, false) + '</td><td>' + mfc(a.retraits.couts, false) + '</td><td><strong>' + mfc(a.vnl, false) + '</strong></td><td>' + pct(a.ratio) + '</td></tr>';
+    });
+    var t = M.aggregate(App.calc().res.mois);
+    if (years.length > 1) h += '<tr class="total"><th>Total</th><td>' + mfc(t.vmb, false) + '</td><td>' + mfc(t.retraits.pertes, false) + '</td><td>' + mfc(t.retraits.inefficacite, false) + '</td><td>' + mfc(t.retraits.hostilite, false) + '</td><td>' + mfc(t.retraits.couts, false) + '</td><td><strong>' + mfc(t.vnl, false) + '</strong></td><td>' + pct(t.ratio) + '</td></tr>';
+    return h + '</tbody></table></div><p class="hint">Montants en M FC. Le ratio annuel est calculé sur les sommes (Σ VNL / Σ VMB).</p>';
+  }
+  App.annualTable = annualTable;
+
+  /* ---------- 3. Diagnostic ---------- */
+  App.views.diagnostic = {
+    html: function () {
+      var r = App.currentMonth();
+      if (!r) return App.empty();
+      var p = App.calc().params;
+      var h = '<div class="head-row"><h2>Diagnostic</h2>' + App.monthSelect(r.mois) + '</div>';
+      h += '<section class="card"><h3>De la marge brute à la VNL, ' + moisLabel(r.mois) + '</h3><div class="chart"><canvas id="chCascade"></canvas></div>' +
+        '<p class="hint">VMB ' + mfc(r.vmb) + ' = pertes ' + mfc(r.retraits.pertes) + ' + inefficacité ' + mfc(r.retraits.inefficacite) + ' + hostilité ' + mfc(r.retraits.hostilite) + ' + coûts ' + mfc(r.retraits.couts) + ' + VNL ' + mfc(r.vnl) + '. Sans hostilité, la VNL aurait été de ' + mfc(r.vnl0) + ' (réduction de ' + pct(r.reductionHostilite) + ').</p></section>';
+      h += '<section class="card"><h3>Qui fait baisser la conversion ?</h3><div class="chart short"><canvas id="chContrib"></canvas></div></section>';
+      // sous-indicateurs les plus éloignés de leur cible
+      var rows = C.SUB_INDICATORS.filter(function (s) { return !p.sub[s.code].exclu && s.dim !== 'xe'; }).map(function (s) {
+        var w = M.dimWeights(p, s.dim)[s.code];
+        return { s: s, brut: r.brut[s.code], norm: r.norm[s.code], cible: p.sub[s.code].cible, w: w };
+      }).sort(function (a, b) { return (isNum(a.norm) ? a.norm : 2) - (isNum(b.norm) ? b.norm : 2); });
+      h += '<section class="card"><h3>Sous-indicateurs les plus éloignés de leur cible</h3><div class="scroll"><table class="num"><thead><tr><th>Code</th><th class="txt">Mesure</th><th>Dimension</th><th>Valeur du mois</th><th>Cible</th><th>Taux d’atteinte</th><th>Poids</th></tr></thead><tbody>' +
+        rows.map(function (x, k) {
+          return '<tr' + (k < 5 ? ' class="hl"' : '') + '><th>' + x.s.code + '</th><td class="txt">' + esc(x.s.label) + '</td><td>' + C.DIMENSIONS.filter(function (d) { return d.code === x.s.dim; })[0].sym + '</td><td>' + num(x.brut, 3) + '</td><td>' + num(x.cible) + '</td><td>' + bar(x.norm) + '</td><td>' + idx(x.w) + '</td></tr>';
+        }).join('') + '</tbody></table></div></section>';
+      h += '<section class="card"><h3>Hostilité du mois</h3><div class="scroll"><table class="num"><thead><tr><th>Code</th><th class="txt">Mesure</th><th>Valeur</th><th>Seuil d’hostilité maximale</th><th>Intensité</th></tr></thead><tbody>' +
+        C.SUB_INDICATORS.filter(function (s) { return s.dim === 'xe'; }).map(function (s) {
+          return '<tr><th>' + s.code + '</th><td class="txt">' + esc(s.label) + '</td><td>' + num(r.brut[s.code], 3) + '</td><td>' + num(p.sub[s.code].cible) + '</td><td>' + bar(r.norm[s.code], true) + '</td></tr>';
+        }).join('') + '</tbody></table></div><p class="hint">Xe = ' + idx(r.idx.xe) + ' ; résilience Rz = ' + idx(r.idx.rz) + ' ; exposition non absorbée E = Xe × (1 − Rz) = ' + idx(r.E) + ' ; Φ = e^(−θE) = ' + idx(r.phi) + '.</p></section>';
+      h += '<section class="card"><h3>Chiffres saisis du mois</h3>' + App.monthInputsTable(r.mois) + '</section>';
+      return h;
+    },
+    after: function () {
+      var r = App.currentMonth();
+      if (!r) return;
+      var steps = [
+        ['VMB', 0, r.vmb], ['Pertes physiques', r.vmb - r.retraits.pertes, r.vmb],
+        ['Inefficacité', r.vmb - r.retraits.pertes - r.retraits.inefficacite, r.vmb - r.retraits.pertes],
+        ['Hostilité', r.vnl + r.clog, r.vnl + r.clog + r.retraits.hostilite],
+        ['Coûts logistiques', r.vnl, r.vnl + r.clog], ['VNL', 0, r.vnl]
+      ];
+      App.chart(document.getElementById('chCascade'), {
+        type: 'bar',
+        data: { labels: steps.map(function (s) { return s[0]; }), datasets: [{ data: steps.map(function (s) { return [s[1] / 1e6, s[2] / 1e6]; }), backgroundColor: [App.color('c1'), App.color('bad'), App.color('bad'), App.color('warn'), App.color('muted'), App.color('good')], borderRadius: 3 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (x) { var v = x.raw; return I.formatNumber(v[1] - v[0], 2) + ' M FC'; } } } }, scales: { y: { ticks: { callback: function (v) { return I.formatNumber(v, 0); } }, title: { display: true, text: 'M FC' } } } }
+      });
+      var keys = ['alpha', 'omega', 'gamma', 'hostilite'];
+      App.chart(document.getElementById('chContrib'), {
+        type: 'bar',
+        data: { labels: keys.map(function (k) { return DIMS[k]; }), datasets: [{ data: keys.map(function (k) { return r.contrib[k]; }), backgroundColor: [App.color('c1'), App.color('c2'), App.color('c3'), App.color('warn')], borderRadius: 3 }] },
+        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (x) { return pct(x.raw); } } } }, scales: { x: { min: 0, ticks: { callback: function (v) { return pct(v, 0); } } } } }
+      });
     }
-  });
+  };
+  function bar(v, host) {
+    if (!isNum(v)) return '—';
+    var cls = host ? (v > 0.66 ? 'bad' : v > 0.33 ? 'warn' : 'good') : (v < 0.5 ? 'bad' : v < 0.85 ? 'warn' : 'good');
+    return '<span class="bar"><span class="fill ' + cls + '" style="width:' + Math.round(v * 100) + '%"></span></span> ' + idx(v);
+  }
 
-  viewEl.addEventListener('click', function (e) {
-    var b = e.target.closest('[data-do]');
-    if (!b) return;
-    var i = Number(b.dataset.i), act = b.dataset.do;
-    if (act === 'csv') return exportCsv();
-    if (act === 'apply') return applyDetail();
-    if (act === 'addyear') {
-      var last = state.years[state.years.length - 1];
-      state.years.push({ year: last.year + 1, vmb: last.vmb, clog: last.clog, idx: Object.assign({}, last.idx) });
-    } else if (act === 'delyear') {
-      if (state.years.length <= 1) return;
-      state.years.splice(i, 1);
-      ui.sel = null;
-      ui.detail = null;
-    } else if (act === 'reset') {
-      if (!window.confirm('Recharger les données de la GAANA ? Vos modifications seront perdues.')) return;
-      state = D.gaana();
-      ui.sel = null;
-      ui.detail = null;
-    } else if (act === 'addam') {
-      state.amdec.push({ name: 'Nouvelle défaillance', f: 1, g: 1, d: 1, dim: '' });
-    } else if (act === 'delam') {
-      state.amdec.splice(i, 1);
-    } else if (act === 'sortam') {
-      state.amdec.sort(function (a, c) { return M.criticality(c.f, c.g, c.d) - M.criticality(a.f, a.g, a.d); });
-    } else if (act === 'addact') {
-      var id = state.actions.reduce(function (m, a) { return Math.max(m, a.id); }, 0) + 1;
-      state.actions.push({ id: id, name: 'Nouvelle action', cost: 10, gain: 10, risk: '' });
-    } else if (act === 'delact') {
-      state.actions.splice(i, 1);
-    } else {
-      return;
+  App.monthInputsTable = function (m) {
+    var rec = S.getMonth(m) || {};
+    return '<details><summary>Voir les ' + C.VARIABLES.length + ' valeurs saisies</summary><div class="scroll"><table class="num"><thead><tr><th>N°</th><th class="txt">Variable</th><th>Valeur</th><th>Service</th></tr></thead><tbody>' +
+      C.VARIABLES.map(function (v) {
+        return '<tr><td>' + v.n + '</td><td class="txt">' + esc(v.label) + (rec.recon && rec.recon[v.key] ? ' <span class="tag" title="' + esc(rec.recon[v.key]) + '">reconstituée</span>' : '') + '</td><td>' + (v.unit === 'fc' ? mfc(rec[v.key]) : num(rec[v.key], 3)) + '</td><td class="txt">' + v.svc + '</td></tr>';
+      }).join('') + '</tbody></table></div>' + (rec.remarque ? '<p><strong>Remarques du mois :</strong> ' + esc(rec.remarque) + '</p>' : '') + '</details>';
+  };
+
+  /* ---------- 4. Alertes ---------- */
+  App.views.alertes = {
+    html: function () {
+      var c = App.calc();
+      if (!c.res.mois.length) return App.empty();
+      var al = c.res.alertes;
+      var first = al.filter(function (a) { return a.regles.some(function (x) { return x.regle === 'niveau'; }); })[0];
+      var h = '<div class="head-row"><h2>Alertes</h2></div>';
+      h += '<section class="card"><p>' + al.length + ' mois en alerte sur ' + c.res.mois.length + ' calculés.' + (first ? ' Première alerte sur le ratio VNL/VMB : <strong>' + moisLabel(first.mois) + '</strong>.' : '') + ' Les règles sont appliquées à tout l’historique, comme si le logiciel avait existé dès le premier mois.</p></section>';
+      var canDecide = S.can('pdg') || S.can('admin');
+      h += '<section class="card"><div class="scroll"><table><thead><tr><th>Mois</th><th>Règle déclenchée</th><th>Dimension en cause</th><th>Action proposée</th><th>Décision de la direction</th></tr></thead><tbody>' +
+        al.slice().reverse().map(function (a) {
+          var act = c.actions.filter(function (x) { return x.n === a.action; })[0];
+          var dec = S.base.decisionsAlertes[a.mois] || '';
+          return '<tr><th><button class="link" data-go="mois" data-mois="' + a.mois + '">' + moisLabel(a.mois) + '</button></th><td>' + a.regles.map(function (x) { return esc(x.label); }).join('<br>') + '</td><td>' + DIMS[a.dim] + '</td><td>' + (act ? 'n° ' + act.n + ' ' + esc(act.nom) : '—') + '</td><td>' +
+            (canDecide ? '<input class="wide" data-change="decision" data-mois="' + a.mois + '" value="' + esc(dec) + '" placeholder="Décision prise…">' : esc(dec)) + '</td></tr>';
+        }).join('') + '</tbody></table></div></section>';
+      return h;
     }
-    save();
-    render();
-  });
+  };
+  App.actions.decision = function (el) {
+    var m = el.dataset.mois, old = S.base.decisionsAlertes[m] || '';
+    S.base.decisionsAlertes[m] = el.value;
+    S.touch('Décision sur l’alerte de ' + m, old, el.value);
+    App.toast('Décision enregistrée.');
+  };
 
-  render();
-})();
+  /* ---------- Démarrage ---------- */
+  App.start = function () {
+    S.load();
+    if (!S.saveOk()) App.toast('Le navigateur refuse l’enregistrement local : les saisies ne seront pas conservées.', 'err');
+    App.render();
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* hors ligne déjà assuré par le stockage local */ });
+    }
+    root.addEventListener('online', function () { document.body.classList.remove('offline'); });
+    root.addEventListener('offline', function () { document.body.classList.add('offline'); });
+    if (!navigator.onLine) document.body.classList.add('offline');
+  };
+})(window);

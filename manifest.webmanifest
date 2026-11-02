@@ -1,0 +1,10 @@
+{
+  "name": "VNL-SAD · Valeur nette logistique",
+  "short_name": "VNL-SAD",
+  "lang": "fr",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f6f5f1",
+  "theme_color": "#1f4e5f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
