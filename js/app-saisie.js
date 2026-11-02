@@ -45,10 +45,10 @@
       var rec = S.getMonth(m);
       var prog = progress(rec);
       var ms = S.months().map(function (x) { return x.mois; });
-      var h = '<div class="head-row"><h2>Saisie et import</h2><div class="inline"><label class="inline">Mois <select data-change="saisieMois">' +
+      var h = App.pageHead('Saisie et import', '45 variables', 'Chaque service renseigne ses variables du mois, ou importe ses fichiers CSV ou Excel.', '<label class="period">Mois <select data-change="saisieMois">' +
         ms.slice().reverse().map(function (x) { return '<option value="' + x + '"' + (x === m ? ' selected' : '') + '>' + F.moisLabel(x) + (S.getMonth(x).cloture ? ' (clôturé)' : '') + '</option>'; }).join('') +
         (ms.indexOf(m) < 0 ? '<option selected value="' + m + '">' + F.moisLabel(m) + ' (nouveau)</option>' : '') +
-        '</select></label><button data-act="newMonth">Nouveau mois</button></div></div>';
+        '</select></label><button data-act="newMonth">' + App.icon('plus') + ' Nouveau mois</button>');
 
       // état d'avancement (F1.2)
       h += '<section class="card"><h3>' + F.moisLabel(m) + (rec && rec.cloture ? ' · <span class="ok">clôturé le ' + esc((rec.clotureLe || '').slice(0, 10)) + ' par ' + esc(rec.cloturePar || '') + '</span>' : '') + '</h3><div class="progress">' +

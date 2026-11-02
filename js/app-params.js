@@ -23,7 +23,13 @@
     html: function () {
       var v = S.paramVersion(), p = v.params;
       var canEdit = S.can('admin') || S.can('pdg');
-      var h = '<div class="head-row"><h2>Paramètres et méthode</h2></div>';
+      var tab = App.state.ptab || 'guide';
+      var h = App.pageHead('Paramètres et méthode', 'Version ' + esc(v.id), 'Comment la VNL est calculée, avec quels seuils et quelles pondérations.');
+      h += '<div class="tabs" role="tablist">' + [['guide', 'book', 'Guide méthodologique'], ['config', 'sliders', 'Configuration'], ['ahp', 'users', 'Pondération AHP']].map(function (t) {
+        return '<button role="tab" data-act="ptab" data-t="' + t[0] + '" aria-selected="' + (tab === t[0]) + '">' + App.icon(t[1]) + t[2] + '</button>';
+      }).join('') + '</div>';
+      if (tab === 'guide') return h + guide(p) + methode();
+      if (tab === 'ahp') return h + App.ahpCard();
       h += '<section class="card"><p>Version active : <strong>' + v.id + '</strong> du ' + esc(v.date.slice(0, 10)) + ' (' + esc(v.auteur) + (v.validePar ? ', validée par ' + esc(v.validePar) : '') + '). ' + esc(v.justification) + '</p>';
       var props = S.base.parametres.propositions;
       if (props.length) {
@@ -72,11 +78,34 @@
       }
       h += '</section>';
 
-      h += App.ahpCard();
-      h += methode();
       return h;
     }
   };
+  App.actions.ptab = function (el) { App.state.ptab = el.dataset.t; App.render(); };
+
+  /* Onglet « Guide méthodologique » : la VNL expliquée à la direction. */
+  var GUIDE_DIMS = [
+    { code: 'alpha', l: 'α', t: 'Efficacité opérationnelle', d: 'Utilisation des capacités, service, productivité et fiabilité des tournées.' },
+    { code: 'omega', l: 'Ω', t: 'Tension sur les stocks', d: 'Couverture, rotation et alignement des stocks sur la demande.' },
+    { code: 'gamma', l: 'γ', t: 'Réactivité commerciale', d: 'Délais de réponse, retours, fidélité et adaptation de l’offre.' },
+    { code: 'rz', l: 'Rz', t: 'Résilience', d: 'Capacité à absorber les chocs : anticipation, stocks de sécurité, liquidité, outils.' },
+    { code: 'xe', l: 'Xe', t: 'Hostilité de l’environnement', d: 'Perturbations subies : prix, transport, coupures, climat, cadre légal.' }
+  ];
+  function guide(p) {
+    var w = function (d) { return d === 'rz' || d === 'xe' ? 'agit sur Φ' : 'poids ' + I.formatNumber(p.wDim[d] * 100, 1) + ' %'; };
+    return '<section class="card"><div class="card-head"><div><h3>' + App.icon('book') + ' Qu’est-ce que la valeur nette logistique ?</h3></div><span class="chip">θ = ' + I.formatNumber(p.theta, 2) + '</span></div>' +
+      '<p>La VNL mesure ce que la chaîne logistique laisse réellement à l’entreprise. On part de la marge brute du mois, on retire les pertes physiques, puis on applique deux coefficients : Ψ, qui traduit la qualité de la conversion opérationnelle (efficacité, stocks, réactivité), et Φ, qui traduit la part de valeur qui résiste à un environnement hostile. Les coûts logistiques sont déduits en dernier.</p>' +
+      '<p>Le ratio VNL/VMB dit quelle part de la marge brute la logistique préserve. Sous ' + F.pct(p.seuilRatio, 1) + ', le mois passe en alerte.</p>' +
+      '<div class="guide-dims">' + GUIDE_DIMS.map(function (d) {
+        return '<div class="dim-card"><div class="dim-top"><span class="letter">' + d.l + '</span><span class="muted">' + w(d.code) + '</span></div><h4>' + d.t + '</h4><p class="muted">' + d.d + '</p></div>';
+      }).join('') + '</div>' +
+      '<div class="formula"><span class="c">// Valeur nette logistique du mois</span>\n<span class="k">VNL</span> = VMB × (1 − τ) × Ψ × Φ − Clog\n\n<span class="k">Ψ</span>   = α^' + I.formatNumber(p.wDim.alpha, 3) + ' × Ω^' + I.formatNumber(p.wDim.omega, 3) + ' × γ^' + I.formatNumber(p.wDim.gamma, 3) + '\n<span class="k">E</span>   = Xe × (1 − Rz)\n<span class="k">Φ</span>   = e^(−θ·E),  θ = ' + I.formatNumber(p.theta, 2) + '</div>' +
+      '<h4>Conventions</h4><div class="conv">' +
+      '<div><strong>Montants</strong>Francs congolais ; M FC = millions de FC.</div>' +
+      '<div><strong>Indices</strong>De 0 à 1 ; 1 signifie que la cible est atteinte. Notes sur 100 dans le diagnostic.</div>' +
+      '<div><strong>Alertes</strong>Ratio sous ' + F.pct(p.seuilRatio, 1) + ', Ω sous ' + F.idx(p.seuilOmega) + ' ou baisse mensuelle de plus de ' + I.formatNumber(p.seuilBaisse * 100, 0) + ' points.</div>' +
+      '<div><strong>Données</strong>Saisies par service, stockées sur cet appareil uniquement.</div></div></section>';
+  }
 
   function readForm() {
     var f = document.getElementById('pform');
@@ -142,7 +171,7 @@
       ['Criticité AMDEC', 'C = F × G × D', 'Moyennes des évaluateurs, de 1 à 125.']
     ];
     return '<section class="card"><h3>D’où viennent les chiffres ?</h3><div class="scroll"><table><thead><tr><th>Élément</th><th>Formule</th><th>En clair</th></tr></thead><tbody>' +
-      rows.map(function (r) { return '<tr><th class="txt">' + r[0] + '</th><td class="formula">' + esc(r[1]) + '</td><td class="txt">' + esc(r[2]) + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
+      rows.map(function (r) { return '<tr><th class="txt">' + r[0] + '</th><td class="fx">' + esc(r[1]) + '</td><td class="txt">' + esc(r[2]) + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
   }
 
   /* ---------- AHP (F4.1 à F4.9) ---------- */
@@ -285,7 +314,7 @@
       var y = App.state.sensYear || (years.indexOf(2022) >= 0 ? 2022 : years[years.length - 1]);
       var tests = App.state.sensTests || { theta: [0.20, 0.25, 0.45, 0.50, 0.70], wAlpha: [0.36, 0.44], cibleTRSS: [0.01, 0.05], clog: [-0.10, 0.10] };
       var sens = M.sensitivity(c.months, c.params, y, tests);
-      var h = '<div class="head-row"><h2>Analyses</h2></div>';
+      var h = App.pageHead('Analyses', 'Sensibilité et statistiques', 'Quelle variable pèse le plus sur la VNL, et les liens observés sont-ils significatifs ?');
       h += '<section class="card"><div class="head-row"><h3>Sensibilité de la VNL</h3><label class="inline">Année <select data-change="sensYear">' + years.map(function (x) { return '<option' + (x === y ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label></div>' +
         '<p>VNL de référence ' + y + ' : <strong>' + F.mfc(sens.reference) + '</strong>. Un écart supérieur à ' + F.pct(c.params.seuilSensibilite, 0) + ' signale un paramètre influent.</p>' +
         '<div class="scroll"><table class="num"><thead><tr><th class="txt">Paramètre</th><th>Valeur testée</th><th>VNL</th><th>Écart</th><th></th></tr></thead><tbody>' +

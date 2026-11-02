@@ -5,30 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VNL-SAD · GAANA</title>
   <meta name="description" content="Système d'aide à la décision sur la valeur nette logistique">
-  <meta name="theme-color" content="#1f4e5f">
+  <meta name="theme-color" content="#0b4a96">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <header class="top">
-    <div class="wrap top-row">
-      <div class="brand">
-        <h1>VNL-SAD</h1>
-        <p>Pilotage de la valeur nette logistique · GAANA</p>
+  <div class="shell">
+    <aside id="side" class="side" aria-label="Menu"></aside>
+    <div class="scrim" data-act="menu" aria-hidden="true"></div>
+    <div class="content">
+      <div class="topbar">
+        <button class="icon-btn" data-act="menu" aria-label="Ouvrir le menu"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+        <span class="logo sm">VNL</span><span id="topTitle"></span>
       </div>
-      <div id="who" class="who"></div>
+      <main id="view" tabindex="-1"></main>
+      <footer class="foot">
+        <p>VNL-SAD, d'après le mémoire de Master 2 de G. Mukenga Kantambwa (UNIKIN, 2026). Montants en francs congolais ; M FC = millions de FC. Les données restent sur cet appareil.</p>
+      </footer>
     </div>
-    <nav id="nav" class="wrap" aria-label="Écrans"></nav>
-  </header>
-
-  <main id="view" class="wrap" tabindex="-1"></main>
+  </div>
   <div id="print" aria-hidden="true"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <footer class="wrap foot">
-    <p>VNL-SAD, d'après le mémoire de Master 2 de G. Mukenga Kantambwa (UNIKIN, 2026). Montants en francs congolais ; M FC = millions de FC. Les données restent sur cet appareil. <span class="offline-note">Hors connexion : tout fonctionne.</span></p>
-  </footer>
 
   <script src="vendor/chart.umd.js"></script>
   <script src="vendor/xlsx.full.min.js"></script>

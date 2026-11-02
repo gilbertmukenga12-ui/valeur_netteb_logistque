@@ -10,7 +10,7 @@
   App.views.admin = {
     html: function () {
       var admin = S.can('admin');
-      var h = '<div class="head-row"><h2>Administration</h2></div>';
+      var h = App.pageHead('Administration', 'Comptes et sauvegardes', 'Sauvegarde, exports, comptes des utilisateurs, questionnaire et journal des modifications.');
 
       // Sauvegarde (F13.3, NF2)
       h += '<section class="card"><h3>Sauvegarde et restauration</h3><p>Chaque valeur est enregistrée dès sa saisie dans cet appareil. Une copie automatique est faite chaque jour (les trois dernières sont gardées). Pour se protéger d’une panne de l’appareil, enregistrez régulièrement une sauvegarde sur une clé USB ou une carte mémoire.</p>' +

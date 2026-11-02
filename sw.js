@@ -1,5 +1,5 @@
 /* Cache hors ligne : l'application fonctionne sans connexion une fois ouverte une première fois. */
-var CACHE = 'vnlsad-v2-1';
+var CACHE = 'vnlsad-v2-2';
 var FILES = ['./', 'index.html', 'css/style.css', 'icon.svg', 'manifest.webmanifest',
   'vendor/chart.umd.js', 'vendor/xlsx.full.min.js',
   'js/config.js', 'js/model.js', 'js/importer.js', 'js/store.js',

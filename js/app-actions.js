@@ -33,10 +33,15 @@
       var opt = M.optimize(c.actions, p.budget, forcedNums());
       var sel = c.actions.filter(function (a) { return opt.actions.indexOf(a.n) >= 0; });
       var unc = M.uncovered(fails, opt.actions, c.actions);
-      var h = '<div class="head-row"><h2>Actions</h2></div>';
+      var h = App.pageHead('Plan d’actions', 'AMDEC et VAN', 'Que financer en premier ? Programme de valeur actuelle nette maximale sous le budget disponible.');
+      var crit = fails.filter(function (f) { return f.classe === 'Critique'; }).length;
+      h += '<div class="stats">' + App.stat('Actions recensées', c.actions.length) + App.stat('Retenues dans le programme', opt.actions.length, 'good') +
+        App.stat('Coût du programme', F.mfc(opt.cout)) + App.stat('VAN cumulée', F.mfc(opt.van), opt.van >= 0 ? 'good' : 'bad') +
+        App.stat('Défaillances critiques', crit, crit ? 'bad' : '') + App.stat('Risques non couverts', unc.length, unc.length ? 'warn' : '') + '</div>';
+      h += matrix(c.actions, opt, p.budget);
 
       // Programme optimal
-      h += '<section class="card"><h3>Que financer en premier ? Budget ' + F.mfc(p.budget) + '</h3>' +
+      h += '<section class="card"><h3>' + App.icon('target') + ' Programme optimal · budget ' + F.mfc(p.budget) + '</h3>' +
         '<p class="big">Actions retenues : <strong>' + (opt.actions.length ? opt.actions.map(function (n) { return 'n° ' + n; }).join(', ') : 'aucune') + '</strong> · coût ' + F.mfc(opt.cout) + ' · VAN cumulée ' + F.mfc(opt.van) + ' · reste ' + F.mfc(opt.reste) + '</p>' +
         (opt.depasse ? '<p class="warn">Les actions imposées dépassent à elles seules le budget.</p>' : '') +
         '<ul>' + sel.map(function (a) { return '<li>n° ' + a.n + ' ' + esc(a.nom) + ' : coût ' + F.mfc(a.cout) + ', VAN ' + F.mfc(a.van) + (opt.imposees.indexOf(a.n) >= 0 ? ' <span class="tag">imposée</span>' : '') + '</li>'; }).join('') + '</ul>';
@@ -83,7 +88,7 @@
           var obs = last ? (a.cible === 'tau' ? last.tau : last.brut[a.cible]) : null;
           return '<tr><td class="txt">n° ' + a.n + ' ' + esc(a.nom) + '</td><td>' + a.cible + '</td><td>' + F.num(a.attendue, 3) + '</td><td>' + F.num(obs, 3) + '</td><td>' + (F.isNum(obs) && F.isNum(a.attendue) ? F.num(obs - a.attendue, 3) : '—') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<p class="hint">Aucune action engagée.</p>') +
-        (editable ? '<label class="inline">Marquer comme engagée <select data-change="engage"><option value="">—</option>' + c.actions.map(function (a) { return '<option value="' + a.n + '">' + (a.engagee ? '✓ ' : '') + 'n° ' + a.n + ' ' + esc(a.nom) + '</option>'; }).join('') + '</select></label>' : '') + '</section>';
+        (editable ? '<label class="inline engage">Marquer comme engagée <select data-change="engage"><option value="">—</option>' + c.actions.map(function (a) { return '<option value="' + a.n + '">' + (a.engagee ? '✓ ' : '') + 'n° ' + a.n + ' ' + esc(a.nom) + '</option>'; }).join('') + '</select></label>' : '') + '</section>';
 
       // AMDEC
       h += '<section class="card"><h3>Analyse des défaillances (AMDEC)</h3><div class="chart"><canvas id="chAmdec"></canvas></div><div class="scroll"><table class="num"><thead><tr><th class="txt">Défaillance</th><th class="txt">Maillon</th><th>F</th><th>G</th><th>D</th><th>Criticité</th><th>Classe</th><th>Source</th></tr></thead><tbody>' +
@@ -108,6 +113,26 @@
       });
     }
   };
+
+  /* Matrice impact / effort : VAN (impact) contre coût d'investissement (effort).
+     Coût faible = au plus 20 % du budget. */
+  function matrix(actions, opt, budget) {
+    var lim = 0.2 * budget;
+    var Q = [
+      { k: 'q1', t: 'Gains rapides', d: 'VAN positive, coût faible : à lancer d’abord.', f: function (a) { return a.van > 0 && a.cout <= lim; } },
+      { k: 'q2', t: 'Projets stratégiques', d: 'VAN positive, coût élevé : à planifier dans le budget.', f: function (a) { return a.van > 0 && a.cout > lim; } },
+      { k: 'q3', t: 'Mesures de sécurité', d: 'VAN nulle ou négative, coût faible : utiles contre un risque grave.', f: function (a) { return a.van <= 0 && a.cout <= lim; } },
+      { k: 'q4', t: 'À différer', d: 'VAN nulle ou négative, coût élevé.', f: function (a) { return a.van <= 0 && a.cout > lim; } }
+    ];
+    return '<section class="card"><div class="card-head"><div><h3>' + App.icon('layers') + ' Matrice valeur / coût</h3><p>Chaque action est classée selon sa VAN et son coût d’investissement (coût faible : au plus ' + F.mfc(lim) + ', soit 20 % du budget). Les actions encadrées sont retenues dans le programme.</p></div></div><div class="matrix">' +
+      Q.map(function (q) {
+        var list = actions.filter(function (a) { return F.isNum(a.van) && q.f(a); }).sort(function (a, b) { return b.van - a.van; });
+        return '<div class="quad ' + q.k + '"><h4>' + q.t + '<span class="badge">' + list.length + '</span></h4><p>' + q.d + '</p><ul>' +
+          (list.length ? list.map(function (a) {
+            return '<li' + (opt.actions.indexOf(a.n) >= 0 ? ' class="sel"' : '') + '><span>n° ' + a.n + ' ' + esc(a.nom) + '</span><small>VAN ' + F.mfc(a.van) + ' · ' + F.mfc(a.cout) + '</small></li>';
+          }).join('') : '<li class="muted">Aucune action</li>') + '</ul></div>';
+      }).join('') + '</div></section>';
+  }
 
   function campaignsCompare() {
     var camps = S.base.campagnesAmdec, p = S.params();

@@ -5,6 +5,6 @@
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f6f5f1",
-  "theme_color": "#1f4e5f",
+  "theme_color": "#0b4a96",
   "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
 }
