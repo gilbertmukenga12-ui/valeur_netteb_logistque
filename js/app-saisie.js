@@ -258,7 +258,7 @@
     var rows = [['mois'].concat(keys).concat(['remarque']), ['N°'].concat(C.VARIABLES.map(function (v) { return v.n + ' ' + v.label; })).concat(['']), ['2023-01'].concat(keys.map(function () { return ''; })).concat([''])];
     var wb = root.XLSX.utils.book_new();
     root.XLSX.utils.book_append_sheet(wb, root.XLSX.utils.aoa_to_sheet(rows), 'Fiche mensuelle');
-    root.XLSX.writeFile(wb, 'modele_fiche_mensuelle_VNL-SAD.xlsx');
+    App.downloadWorkbook(wb, 'modele_fiche_mensuelle_VNL-SAD.xlsx');
   };
 
   /* ---------- Audit (F2.1 à F2.4) ---------- */

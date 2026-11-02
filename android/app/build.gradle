@@ -1,0 +1,44 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'cd.gaana.vnlsad'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'cd.gaana.vnlsad'
+        minSdk 24
+        targetSdk 34
+        versionCode 2
+        versionName '2.0'
+    }
+
+    // Signature : clé fournie par les secrets GitHub (ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD).
+    // Sans ces secrets, une clé temporaire est créée par le workflow.
+    signingConfigs {
+        vnl {
+            storeFile file(System.getenv('VNL_KEYSTORE') ?: '../release.keystore')
+            storePassword System.getenv('VNL_KEYSTORE_PASSWORD') ?: ''
+            keyAlias 'vnlsad'
+            keyPassword System.getenv('VNL_KEYSTORE_PASSWORD') ?: ''
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.vnl
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// Copie l'application web dans les ressources de l'APK.
+def copyWeb = tasks.register('copyWeb', Copy) {
+    from(rootProject.file('..')) {
+        include 'index.html', 'manifest.webmanifest', 'icon.svg', 'css/**', 'js/**', 'vendor/**'
+    }
+    into layout.projectDirectory.dir('src/main/assets/www')
+}
+preBuild.dependsOn copyWeb

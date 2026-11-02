@@ -120,13 +120,26 @@
   };
 
   /* ---------- Sauvegarde ---------- */
+  /* Téléchargement d'un fichier. Sur Android, passe par l'application (dossier Téléchargements). */
   function download(name, content, type) {
+    if (root.AndroidBridge && root.AndroidBridge.saveFile) {
+      var bytes = typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
+      var bin = '';
+      for (var i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      var ok = root.AndroidBridge.saveFile(name, btoa(bin), type.split(';')[0]);
+      App.toast(ok ? 'Fichier enregistré dans Téléchargements : ' + name : 'Enregistrement impossible.', ok ? '' : 'err');
+      return;
+    }
     var blob = new Blob([content], { type: type });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
   }
+  App.download = download;
+  App.downloadWorkbook = function (wb, name) {
+    download(name, root.XLSX.write(wb, { bookType: 'xlsx', type: 'array' }), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  };
   function stamp() { return new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-'); }
   App.actions.backup = function () {
     S.touch('Sauvegarde manuelle');
@@ -181,7 +194,7 @@
     X.utils.book_append_sheet(wb, X.utils.json_to_sheet(App.failuresNow().map(function (f) { return { defaillance: f.nom, maillon: f.maillon, F: f.F, G: f.G, D: f.D, criticite: f.C, classe: f.classe, source: f.source }; })), 'AMDEC');
     X.utils.book_append_sheet(wb, X.utils.json_to_sheet(S.base.parametres.versions.map(function (v) { return { version: v.id, date: v.date, auteur: v.auteur, justification: v.justification, parametres: JSON.stringify(v.params) }; })), 'Paramètres');
     X.utils.book_append_sheet(wb, X.utils.json_to_sheet(S.base.journal), 'Journal');
-    X.writeFile(wb, 'VNL-SAD_export_' + stamp() + '.xlsx');
+    App.downloadWorkbook(wb, 'VNL-SAD_export_' + stamp() + '.xlsx');
   };
   App.actions.exportCsv = function () {
     var rows = resultRows();
@@ -200,7 +213,10 @@
     document.body.classList.add('printing');
     var done = function () { document.body.classList.remove('printing'); box.innerHTML = ''; root.removeEventListener('afterprint', done); };
     root.addEventListener('afterprint', done);
-    setTimeout(function () { root.print(); }, 50);
+    setTimeout(function () {
+      if (root.AndroidBridge && root.AndroidBridge.print) root.AndroidBridge.print();
+      else root.print();
+    }, 50);
   }
   function header(title) {
     return '<header class="p-head"><div><strong>GAANA SPRL</strong> · VNL-SAD</div><div>' + esc(title) + '</div><div>Imprimé le ' + new Date().toLocaleDateString('fr-FR') + '</div></header>';

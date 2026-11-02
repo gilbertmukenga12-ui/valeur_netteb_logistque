@@ -1,0 +1,79 @@
+# Construit l'application Android (APK) et Windows (EXE), puis les publie
+# dans la version GitHub « vnl-sad-latest », téléchargeable depuis la page Releases.
+name: Applications Android et Windows
+
+on:
+  push:
+    branches: [main, vnl-sad-v2]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: applications-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tests du moteur
+        run: node tests/model.test.js
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: APK Android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          export VNL_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$VNL_KEYSTORE"
+            export VNL_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"
+          else
+            echo "::warning::Pas de clé fixe dans les secrets : APK signé avec une clé temporaire."
+            export VNL_KEYSTORE_PASSWORD="$(openssl rand -hex 16)"
+            keytool -genkeypair -keystore "$VNL_KEYSTORE" -storetype PKCS12 -storepass "$VNL_KEYSTORE_PASSWORD" -keypass "$VNL_KEYSTORE_PASSWORD" \
+              -alias vnlsad -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=VNL-SAD, O=GAANA SPRL, L=Kinshasa, C=CD"
+          fi
+          gradle -p android assembleRelease --no-daemon
+          cp android/app/build/outputs/apk/release/app-release.apk VNL-SAD.apk
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: EXE Windows
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          windows/build.sh
+          cp windows/VNL-SAD.exe VNL-SAD.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VNL-SAD-applications
+          path: |
+            VNL-SAD.apk
+            VNL-SAD.exe
+
+      - name: Publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete vnl-sad-latest --cleanup-tag -y || true
+          gh release create vnl-sad-latest VNL-SAD.apk VNL-SAD.exe \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "VNL-SAD 2.0 (Android et Windows)" \
+            --notes "Android : télécharger VNL-SAD.apk sur le téléphone, autoriser l'installation depuis cette source, puis ouvrir. Windows 10 : télécharger VNL-SAD.exe et le lancer (si SmartScreen s'affiche : Informations complémentaires, puis Exécuter quand même). Construit depuis ${GITHUB_SHA::7}."

@@ -401,5 +401,10 @@
     root.addEventListener('online', function () { document.body.classList.remove('offline'); });
     root.addEventListener('offline', function () { document.body.classList.add('offline'); });
     if (!navigator.onLine) document.body.classList.add('offline');
+    // Version Windows : le petit serveur local s'arrête quand plus aucune fenêtre ne le signale.
+    if (location.hostname === '127.0.0.1' && location.port === '47831') {
+      setInterval(function () { fetch('/ping', { cache: 'no-store' }).catch(function () {}); }, 20000);
+      fetch('/ping', { cache: 'no-store' }).catch(function () {});
+    }
   };
 })(window);
