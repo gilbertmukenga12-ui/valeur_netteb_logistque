@@ -150,6 +150,7 @@
     var u = S.user();
     document.getElementById('side').innerHTML = sidebar();
     document.body.classList.toggle('no-user', !u);
+    if (!u) { document.body.classList.remove('nav-open'); document.getElementById('topTitle').textContent = 'VNL-SAD · GAANA'; }
     if (!S.base.utilisateurs.length) { main.innerHTML = firstRun(); bind(main); return; }
     if (!u) { main.innerHTML = loginView(); bind(main); return; }
     var view = App.views[App.state.view] || App.views.mois;
@@ -199,7 +200,9 @@
       '<p>Créez le compte de l’administrateur. Il pourra ensuite créer les comptes des responsables, du PDG et de l’opérateur de saisie.</p>' +
       '<form id="first" class="form">' +
       '<label>Nom<input name="nom" required autocomplete="name"></label>' +
-      '<label>Mot de passe<input name="pw" type="password" required minlength="4" autocomplete="new-password"></label>' +
+      '<label>Mot de passe (4 caractères au moins)<input name="pw" type="password" required minlength="4" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"></label>' +
+      '<label>Confirmer le mot de passe<input name="pw2" type="password" required minlength="4" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"></label>' +
+      '<label class="check"><input type="checkbox" data-change="showPw"> Afficher le mot de passe</label>' +
       '<fieldset><legend>Rôles de ce compte</legend>' + ROLES.map(function (r) {
         return '<label class="check"><input type="checkbox" name="roles" value="' + r.code + '"' + (r.code === 'admin' ? ' checked' : '') + '> ' + r.label + '</label>';
       }).join('') + '</fieldset>' +
@@ -209,27 +212,62 @@
   App.actions.first = function () {
     var f = document.getElementById('first');
     if (!f.reportValidity()) return;
+    if (f.pw.value !== f.pw2.value) { App.toast('Les deux mots de passe ne sont pas identiques.', 'err'); f.pw2.focus(); return; }
     var roles = Array.prototype.map.call(f.querySelectorAll('[name=roles]:checked'), function (x) { return x.value; });
     if (roles.indexOf('admin') < 0) roles.push('admin');
     var u = S.addUser(f.nom.value.trim(), roles, f.pw.value, 'A1');
     S.setUser(u);
-    App.go(S.months().length ? 'mois' : 'saisie');
+    showRecovery(S.newRecoveryCode(), S.months().length ? 'mois' : 'saisie');
+  };
+  /* Affiche le code de secours une seule fois, à noter sur papier. */
+  function showRecovery(code, next) {
+    document.getElementById('side').innerHTML = sidebar();
+    var main = document.getElementById('view');
+    main.innerHTML = '<section class="card narrow"><div class="login-logo"><span class="logo big">VNL</span></div><h2>Notez votre code de secours</h2>' +
+      '<p>Ce code permet de choisir un nouveau mot de passe si vous oubliez le vôtre, sans perdre vos données. Il ne sera plus affiché.</p>' +
+      '<p class="recovery">' + code + '</p><p class="hint">Recopiez-le sur papier ou prenez-le en photo, et gardez-le à part.</p>' +
+      '<button class="primary" data-go="' + next + '">J’ai noté le code, continuer</button></section>';
+  }
+  App.actions.newRecovery = function () {
+    if (!root.confirm('Créer un nouveau code de secours ? L’ancien ne fonctionnera plus.')) return;
+    showRecovery(S.newRecoveryCode(), 'admin');
+  };
+  App.actions.showPw = function (el) {
+    el.closest('form').querySelectorAll('input[name^=pw]').forEach(function (x) { x.type = el.checked ? 'text' : 'password'; });
   };
 
   function loginView() {
     var users = S.base.utilisateurs.filter(function (u) { return u.actif; });
     return '<section class="card narrow"><div class="login-logo"><span class="logo big">VNL</span></div><h2>Connexion</h2><p class="hint">Pilotage de la valeur nette logistique de la GAANA.</p><form id="login" class="form">' +
       '<label>Utilisateur<select name="id">' + users.map(function (u) { return '<option value="' + u.id + '">' + esc(u.nom) + '</option>'; }).join('') + '</select></label>' +
-      '<label>Mot de passe<input name="pw" type="password" required autocomplete="current-password"></label>' +
-      '<button class="primary" data-act="login">Entrer</button></form></section>';
+      '<label>Mot de passe<input name="pw" type="password" required autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"></label>' +
+      '<label class="check"><input type="checkbox" data-change="showPw"> Afficher le mot de passe</label>' +
+      '<button class="primary" data-act="login">Entrer</button></form>' +
+      '<details class="forgot"><summary>Mot de passe oublié ?</summary><form id="reset" class="form">' +
+      (S.hasRecovery() ? '<p class="hint">Saisissez le code de secours remis à la création du premier compte, puis un nouveau mot de passe pour l’utilisateur choisi ci-dessus.</p>' +
+        '<label>Code de secours<input name="code" required placeholder="XXXX-XXXX" autocapitalize="characters" autocorrect="off" spellcheck="false"></label>' +
+        '<label>Nouveau mot de passe<input name="pw" type="password" required minlength="4" autocomplete="new-password" autocapitalize="off"></label>' +
+        '<label>Confirmer<input name="pw2" type="password" required minlength="4" autocomplete="new-password" autocapitalize="off"></label>' +
+        '<button data-act="resetPw">Changer le mot de passe</button>'
+        : '<p class="hint">Cette installation n’a pas de code de secours. Un administrateur peut redéfinir le mot de passe depuis son compte (Administration › Comptes). À défaut, désinstallez puis réinstallez l’application : elle repart d’une base vide, à recharger depuis une sauvegarde ou les fichiers CSV.</p>') +
+      '</form></details></section>';
   }
   App.actions.login = function () {
     var f = document.getElementById('login');
     var u = S.login(f.id.value, f.pw.value);
-    if (!u) { App.toast('Mot de passe incorrect.', 'err'); return; }
+    if (!u) { App.toast('Mot de passe incorrect. Cochez « Afficher le mot de passe » pour vérifier la saisie.', 'err'); return; }
     var v = 'mois';
     try { v = root.sessionStorage.getItem('vnlsad.vue') || v; } catch (e) { /* rien */ }
     App.go(S.months().length ? v : 'saisie');
+  };
+  App.actions.resetPw = function () {
+    var f = document.getElementById('reset');
+    if (!f.reportValidity()) return;
+    if (f.pw.value !== f.pw2.value) { App.toast('Les deux mots de passe ne sont pas identiques.', 'err'); return; }
+    var id = document.getElementById('login').id.value;
+    if (!S.resetWithCode(id, f.code.value, f.pw.value)) { App.toast('Code de secours incorrect.', 'err'); return; }
+    App.toast('Mot de passe changé. Vous pouvez entrer.');
+    App.render();
   };
   App.actions.logout = function () { S.setUser(null); App.render(); };
 

@@ -8,8 +8,8 @@ android {
         applicationId 'cd.gaana.vnlsad'
         minSdk 24
         targetSdk 34
-        versionCode 2
-        versionName '2.0'
+        versionCode 4
+        versionName '2.1.1'
     }
 
     // Signature : clé fournie par les secrets GitHub (ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD).

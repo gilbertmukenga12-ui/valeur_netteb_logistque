@@ -4,7 +4,7 @@ name: Applications Android et Windows
 
 on:
   push:
-    branches: [main, vnl-sad-v2]
+    branches: [main, vnl-sad-v3]
   workflow_dispatch:
 
 permissions:
@@ -61,19 +61,26 @@ jobs:
           windows/build.sh
           cp windows/VNL-SAD.exe VNL-SAD.exe
 
+      - name: Installateur Windows
+        run: |
+          sudo apt-get install -y -q nsis >/dev/null
+          (cd windows && makensis -V2 -DVERSION=2.1 installer.nsi)
+          cp windows/VNL-SAD-Installation.exe VNL-SAD-Installation.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: VNL-SAD-applications
           path: |
             VNL-SAD.apk
             VNL-SAD.exe
+            VNL-SAD-Installation.exe
 
       - name: Publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete vnl-sad-latest --cleanup-tag -y || true
-          gh release create vnl-sad-latest VNL-SAD.apk VNL-SAD.exe \
+          gh release create vnl-sad-latest VNL-SAD.apk VNL-SAD-Installation.exe VNL-SAD.exe \
             --target "$GITHUB_SHA" --prerelease \
-            --title "VNL-SAD 2.0 (Android et Windows)" \
-            --notes "Android : télécharger VNL-SAD.apk sur le téléphone, autoriser l'installation depuis cette source, puis ouvrir. Windows 10 : télécharger VNL-SAD.exe et le lancer (si SmartScreen s'affiche : Informations complémentaires, puis Exécuter quand même). Construit depuis ${GITHUB_SHA::7}."
+            --title "VNL-SAD 2.1 (Android et Windows)" \
+            --notes "Android : télécharger VNL-SAD.apk sur le téléphone, autoriser l'installation depuis cette source, puis ouvrir. Windows 10 : lancer VNL-SAD-Installation.exe (raccourcis Bureau et Menu Démarrer ; VNL-SAD.exe seul reste disponible sans installation) (si SmartScreen s'affiche : Informations complémentaires, puis Exécuter quand même). Construit depuis ${GITHUB_SHA::7}."
