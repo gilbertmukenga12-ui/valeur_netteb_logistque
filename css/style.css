@@ -368,6 +368,9 @@ fieldset.fail { margin-top: 8px; }
 .engage { max-width: 100%; }
 .engage select { min-width: 0; width: 100%; max-width: 32em; }
 
+.recovery { font: 700 1.8rem/1.2 var(--mono); letter-spacing: .12em; text-align: center; padding: 14px; border: 2px dashed var(--accent); border-radius: 12px; color: var(--accent); background: var(--accent-soft); }
+details.forgot { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
+
 /* Messages */
 .toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(140%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; max-width: calc(100% - 32px); transition: transform .2s; z-index: 60; font-size: .92rem; }
 .toast.show { transform: translateX(-50%) translateY(0); }
@@ -385,7 +388,7 @@ fieldset.fail { margin-top: 8px; }
   body.nav-open .scrim { display: block; position: fixed; inset: 0; background: rgba(10,20,35,.35); z-index: 25; }
   .topbar { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); padding: 8px 12px; }
   #topTitle { font-weight: 650; }
-  body.no-user .topbar .icon-btn { display: none; }
+  body.no-user .topbar .icon-btn, body.no-user .side { display: none; }
   main { padding: 16px 16px 24px; }
   .foot { padding: 0 16px 18px; }
   .split, .split.even, .sim { grid-template-columns: 1fr; }

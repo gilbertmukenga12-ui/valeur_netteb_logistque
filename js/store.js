@@ -258,9 +258,35 @@
   }
   function login(id, pw) {
     var u = base.utilisateurs.filter(function (x) { return x.id === id && x.actif; })[0];
-    if (!u || u.hash !== hashPw(pw, u.sel)) return null;
+    if (!u) return null;
+    // Les claviers de téléphone ajoutent parfois une espace finale : on l'ignore.
+    if (u.hash !== hashPw(pw, u.sel) && u.hash !== hashPw(String(pw).trim(), u.sel)) return null;
     currentUser = u;
     return u;
+  }
+
+  /* Code de secours : remis à la création du premier compte, il permet de redéfinir
+     un mot de passe oublié sans perdre les données de l'appareil. */
+  function newRecoveryCode() {
+    var a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', c = '';
+    for (var i = 0; i < 8; i++) c += a[Math.floor(Math.random() * a.length)];
+    c = c.slice(0, 4) + '-' + c.slice(4);
+    var sel = uid('s');
+    base.secours = { sel: sel, hash: hashPw(c, sel) };
+    log('Code de secours renouvelé');
+    persist();
+    return c;
+  }
+  function normCode(c) { c = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return c.slice(0, 4) + '-' + c.slice(4); }
+  function hasRecovery() { return !!base.secours; }
+  function resetWithCode(id, code, pw) {
+    if (!base.secours || base.secours.hash !== hashPw(normCode(code), base.secours.sel)) return false;
+    var u = base.utilisateurs.filter(function (x) { return x.id === id; })[0];
+    if (!u) return false;
+    u.sel = uid('s'); u.hash = hashPw(pw, u.sel); u.actif = true;
+    log('Mot de passe redéfini avec le code de secours : ' + u.nom);
+    persist();
+    return true;
   }
   function can(role) {
     if (!currentUser) return false;
@@ -307,6 +333,9 @@
     addUser: addUser,
     updateUser: updateUser,
     login: login,
+    newRecoveryCode: newRecoveryCode,
+    hasRecovery: hasRecovery,
+    resetWithCode: resetWithCode,
     setUser: setUser,
     user: user,
     can: can,

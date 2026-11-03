@@ -34,7 +34,8 @@
             }).join('') + '<td><input type="checkbox" data-change="uactif" data-id="' + u.id + '"' + (u.actif ? ' checked' : '') + (u.id === S.user().id ? ' disabled' : '') + '></td><td><button class="link" data-act="upw" data-id="' + u.id + '">Mot de passe</button></td></tr>';
           }).join('') + '</tbody></table></div>' +
           '<form id="newU" class="grid3"><label>Nom<input name="nom"></label><label>Code évaluateur<input name="code" placeholder="P1…P5"></label><label>Mot de passe initial<input name="pw" type="password" autocomplete="new-password"></label><button data-act="addUser">Créer le compte</button></form>' +
-          '<p class="hint">Un utilisateur peut cumuler plusieurs rôles. Les codes évaluateurs servent à l’AHP, à l’AMDEC et au questionnaire ; seuls le PDG et l’administrateur voient leur correspondance avec les personnes.</p></section>';
+          '<p class="hint">Un utilisateur peut cumuler plusieurs rôles. Les codes évaluateurs servent à l’AHP, à l’AMDEC et au questionnaire ; seuls le PDG et l’administrateur voient leur correspondance avec les personnes.</p>' +
+          '<p>' + (S.hasRecovery() ? 'Un code de secours existe pour redéfinir un mot de passe oublié depuis l’écran de connexion.' : 'Aucun code de secours n’a encore été créé.') + ' <button class="link" data-act="newRecovery">' + (S.hasRecovery() ? 'Créer un nouveau code de secours' : 'Créer un code de secours') + '</button></p></section>';
       } else {
         h += '<section class="card"><h3>Mon compte</h3><button data-act="upw" data-id="' + S.user().id + '">Changer mon mot de passe</button></section>';
       }
